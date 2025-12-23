@@ -2,8 +2,8 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY requirements.txt /app/
-COPY *federated_topology* /app/
+# σωστό path προς το requirements.txt
+COPY cloud/requirements.txt /app/
 
 RUN mkdir -p "/app/models"
 RUN mkdir -p "/app/status"
@@ -15,9 +15,13 @@ RUN apt-get update && apt-get install -y \
     dnsutils \
     iproute2 \
     && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
+# αντιγράφουμε ΟΛΟΝ τον φάκελο cloud στο /app/cloud
 COPY cloud /app/cloud
+
+# αντιγράφουμε τον shared
 COPY shared /app/shared
 
 ENV PYTHONPATH=/app:/app/cloud:/app/shared

@@ -5,7 +5,7 @@ WORKDIR /app
 RUN mkdir -p "/app/models"
 RUN mkdir -p "/app/models/outbox"
 
-COPY requirements.txt /app/
+COPY fog/requirements.txt /app/
 COPY *federated_topology* /app/
 
 RUN apt-get update && apt-get install -y \
