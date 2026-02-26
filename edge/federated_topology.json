@@ -1,0 +1,31 @@
+{
+  "nodes": [
+    {
+      "name": "CLOUD",
+      "node_type": 1,
+      "ip_address": "192.168.1.12",
+      "port": 8081,
+      "device_mac": "AA:AA:AA:AA:AA:01",
+      "parent": null,
+      "children": [8082]
+    },
+    {
+      "name": "FOG",
+      "node_type": 2,
+      "ip_address": "192.168.1.16",
+      "port": 8082,
+      "device_mac": "AA:AA:AA:AA:AA:02",
+      "parent": 8081,
+      "children": [8083]
+    },
+    {
+      "name": "EDGE",
+      "node_type": 3,
+      "ip_address": "192.168.1.16",
+      "port": 8083,
+      "device_mac": "AA:AA:AA:AA:AA:03",
+      "parent": 8082,
+      "children": []
+    }
+  ]
+}

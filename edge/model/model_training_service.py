@@ -44,24 +44,39 @@ def compute_metrics(y_true, y_pred):
 # Streaming CSV generator
 # =========================
 def data_generator(file_path, feature_columns, target_column, sequence_length):
-    for chunk in pd.read_csv(file_path, chunksize=5000):
-        chunk = chunk.dropna(subset=[target_column])
-        if len(chunk) <= sequence_length:
-            continue
+    """
+    Reads the CSV in one shot (it's already filtered/small) and yields batches.
+    Chunked reading caused edge cases with small datasets.
+    """
+    df = pd.read_csv(file_path)
 
-        X = chunk[feature_columns].astype("float32").values
-        y = chunk[target_column].astype("float32").values
+    # Validate columns
+    missing = [c for c in feature_columns + [target_column] if c not in df.columns]
+    if missing:
+        logger.error(f"Missing columns in {file_path}: {missing}")
+        return
 
-        dataset = timeseries_dataset_from_array(
-            data=X,
-            targets=y,
-            sequence_length=sequence_length,
-            batch_size=32,
-            shuffle=False,
+    df = df.dropna(subset=[target_column])
+
+    if len(df) <= sequence_length:
+        logger.warning(
+            f"Not enough rows ({len(df)}) for sequence_length={sequence_length} in {file_path}"
         )
+        return
 
-        for batch in dataset:
-            yield batch
+    X = df[feature_columns].astype("float32").values
+    y = df[target_column].astype("float32").values
+
+    dataset = timeseries_dataset_from_array(
+        data=X,
+        targets=y,
+        sequence_length=sequence_length,
+        batch_size=32,
+        shuffle=False,
+    )
+
+    for batch in dataset:
+        yield batch
 
 
 # =========================
@@ -102,6 +117,7 @@ def train_local_edge_model(
     preprocess_data(training_data_path, "datetime", "apparent power (kWh)")
     train_df = pd.read_csv(training_data_path)
     logger.info(f"Training data shape: {train_df.shape}")
+    logger.info(f"Training data columns: {train_df.columns.tolist()}")
 
     # -------- Evaluation data --------
     filter_data_by_interval_date(
@@ -125,24 +141,25 @@ def train_local_edge_model(
     logger.info(f"Evaluation data shape: {eval_df.shape}")
 
     # -------- Features --------
-    feature_columns = required_columns.copy()
-    feature_columns.remove("value")
+    # required_columns has 'value' as target — remove it for features
+    feature_columns = [c for c in required_columns if c != "value"]
     num_features = len(feature_columns)
+    logger.info(f"Using {num_features} input features: {feature_columns}")
 
-    logger.info(f"Using {num_features} input features.")
+    # -------- Validate columns exist --------
+    for col in feature_columns + ["value"]:
+        if col not in train_df.columns:
+            raise ValueError(f"Column '{col}' missing from training data after preprocessing.")
 
-    # -------- Datasets --------
+    # -------- Dataset factory --------
     def make_dataset(csv_path):
         return tf.data.Dataset.from_generator(
-            lambda: data_generator(csv_path, feature_columns, "value", sequence_length),
+            lambda p=csv_path: data_generator(p, feature_columns, "value", sequence_length),
             output_signature=(
                 tf.TensorSpec(shape=(None, sequence_length, num_features), dtype=tf.float32),
                 tf.TensorSpec(shape=(None,), dtype=tf.float32),
             ),
         )
-
-    train_dataset = make_dataset(training_data_path).repeat()
-    eval_dataset = make_dataset(evaluation_data_path)
 
     def calc_steps(n_rows):
         sequences = max(0, n_rows - sequence_length)
@@ -151,7 +168,7 @@ def train_local_edge_model(
     train_steps = calc_steps(len(train_df))
     eval_steps = calc_steps(len(eval_df))
 
-    eval_dataset_eval = eval_dataset.take(eval_steps)
+    logger.info(f"Train steps: {train_steps}, Eval steps: {eval_steps}")
 
     # -------- Load model --------
     model_path = EdgeResourcesPaths.NON_TRAINED_LOCAL_EDGE_MODEL_FILE_PATH.value
@@ -164,40 +181,47 @@ def train_local_edge_model(
         loss=tf.keras.losses.Huber(),
     )
 
-    # -------- Metrics before --------
+    # -------- Metrics BEFORE training --------
+    # Φτιάχνουμε fresh dataset — δεν κάνουμε reuse
+    logger.info("Computing metrics before training...")
     y_true_before, y_pred_before = [], []
-    for X, y in eval_dataset_eval:
-        preds = model.predict(X, verbose=0)
-        y_true_before.append(y.numpy())
-        y_pred_before.append(preds)
+    for X_batch, y_batch in make_dataset(evaluation_data_path).take(eval_steps):
+        preds = model.predict(X_batch, verbose=0)
+        y_true_before.append(y_batch.numpy())
+        y_pred_before.append(preds.flatten())
 
     before_metrics = compute_metrics(
-        np.concatenate(y_true_before) if y_true_before else None,
-        np.concatenate(y_pred_before) if y_pred_before else None,
+        np.concatenate(y_true_before) if y_true_before else np.array([]),
+        np.concatenate(y_pred_before) if y_pred_before else np.array([]),
     )
+    logger.info(f"Metrics before training: {before_metrics}")
 
     # -------- Training --------
     logger.info("Starting local edge training...")
     model.fit(
-        train_dataset,
+        make_dataset(training_data_path).repeat(),
         epochs=40,
         steps_per_epoch=train_steps,
-        validation_data=eval_dataset_eval,
+        # Fresh dataset για validation — ΔΕΝ reuse exhausted dataset
+        validation_data=make_dataset(evaluation_data_path).repeat(),
         validation_steps=eval_steps,
         verbose=1,
     )
 
-    # -------- Metrics after --------
+    # -------- Metrics AFTER training --------
+    # Και εδώ fresh dataset
+    logger.info("Computing metrics after training...")
     y_true_after, y_pred_after = [], []
-    for X, y in eval_dataset_eval:
-        preds = model.predict(X, verbose=0)
-        y_true_after.append(y.numpy())
-        y_pred_after.append(preds)
+    for X_batch, y_batch in make_dataset(evaluation_data_path).take(eval_steps):
+        preds = model.predict(X_batch, verbose=0)
+        y_true_after.append(y_batch.numpy())
+        y_pred_after.append(preds.flatten())
 
     after_metrics = compute_metrics(
-        np.concatenate(y_true_after) if y_true_after else None,
-        np.concatenate(y_pred_after) if y_pred_after else None,
+        np.concatenate(y_true_after) if y_true_after else np.array([]),
+        np.concatenate(y_pred_after) if y_pred_after else np.array([]),
     )
+    logger.info(f"Metrics after training: {after_metrics}")
 
     # -------- Save model --------
     Path(EdgeResourcesPaths.MODELS_FOLDER_PATH.value).mkdir(parents=True, exist_ok=True)

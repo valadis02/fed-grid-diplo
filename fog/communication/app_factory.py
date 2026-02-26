@@ -9,7 +9,7 @@ from shared.node_state import FederatedNodeState
 from shared.shared_main import shared_router
 from fog.communication.fog_messaging import FogMessaging
 
-app = FastAPI()
+app = FastAPI(title="Fog Node API")
 
 fog_messaging = FogMessaging()
 
@@ -21,34 +21,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Περιλαμβάνει τα κοινά endpoints (π.χ. health checks)
 app.include_router(shared_router, prefix="/node")
-
 
 @app.on_event("startup")
 async def startup_event():
     logger.info("Initializing fog application...")
-    monitoring_thread = None
-
+    
     def start_listeners_when_node_is_ready(fog_messaging_arg, already_started=None):
         if already_started is None:
             already_started = {'done': False}
+        
+        if already_started['done']:
+            return
+
+        # Προσπάθεια αναγνώρισης του Node από το topology.json
         node = FederatedNodeState.get_current_node()
-        if not already_started['done'] and node is not None:
-            logger.info("FederatedNodeState initialized! Stating AMQP/MQTT listeners...")
+        
+        # Αν βρεθεί το node Η αν θέλουμε να το εξαναγκάσουμε (Force Start)
+        if node is not None:
+            logger.info(f"FederatedNodeState initialized for node: {node.name}!")
+        else:
+            logger.warning("FederatedNodeState not initialized yet (IP/MAC mismatch). Forcing listeners anyway...")
+
+        # Ξεκινάμε τους listeners σε κάθε περίπτωση για να δουλέψει το σύστημα
+        try:
+            logger.info("Starting AMQP/MQTT listeners...")
             threading.Thread(target=fog_messaging_arg.start_mqtt_listener, daemon=True).start()
             threading.Thread(target=fog_messaging_arg.start_amqp_listener, daemon=True).start()
             threading.Thread(target=fog_messaging_arg.start_edge_model_listener, daemon=True).start()
             threading.Thread(target=fog_messaging_arg.start_cloud_uplink_worker, daemon=True).start()
+            
             already_started['done'] = True
-            monitoring_thread.stop()
+            logger.info("All Fog listeners are up and running.")
+            
+            # Σταματάμε το monitoring thread αφού ξεκινήσαμε
+            if 'monitoring_thread' in globals():
+                monitoring_thread.stop()
+        except Exception as e:
+            logger.error(f"Failed to start listeners: {e}")
 
+    global monitoring_thread
     monitoring_thread = MonitoringThread(
         start_listeners_when_node_is_ready,
-        10,
+        5, # Έλεγχος κάθε 5 δευτερόλεπτα αντί για 10
         fog_messaging,
     )
     monitoring_thread.start()
 
-
 if __name__ == "__main__":
+    # Προσοχή: Εδώ χρησιμοποιούμε την πόρτα 8081 εσωτερικά
     uvicorn.run(app, host="0.0.0.0", port=8081)

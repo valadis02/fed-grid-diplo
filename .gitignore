@@ -1,5 +1,24 @@
-.idea
-# ignore built wheels
-*/wheels/
-tf310/
-wheels/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Models
+*.keras
+*.pth
+*.h5
+
+# Data
+data/input_data.csv
+edge/data/input_data.csv
+
+# Status/runtime
+cloud/status/round.json
+cloud/models/
+fog/models/
+edge/models/
+
+# Logs
+*.log
+cloud/status/
+edge/data/filtered_data/

@@ -2,30 +2,22 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# σωστό path προς το requirements.txt
-COPY cloud/requirements.txt /app/
-
-RUN mkdir -p "/app/models"
-RUN mkdir -p "/app/status"
-
+# Εγκατάσταση απαραίτητων εργαλείων
 RUN apt-get update && apt-get install -y \
     build-essential \
     python3-dev \
-    iputils-ping \
-    dnsutils \
-    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Αντιγραφή requirements και εγκατάσταση
+COPY cloud/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# αντιγράφουμε ΟΛΟΝ τον φάκελο cloud στο /app/cloud
+# Αντιγραφή των φακέλων - ΠΡΟΣΟΧΗ ΣΤΑ PATHS
+COPY shared /app/shared
 COPY cloud /app/cloud
 
-# αντιγράφουμε τον shared
-COPY shared /app/shared
+# Ορισμός του PYTHONPATH ώστε η Python να ψάχνει στο /app
+ENV PYTHONPATH="/app"
 
-ENV PYTHONPATH=/app:/app/cloud:/app/shared
-
-EXPOSE 8081
-
-CMD ["uvicorn", "cloud.communication.app_factory:app", "--host", "0.0.0.0", "--port", "8081"]
+# Εκκίνηση με το module notation
+CMD ["python3", "-m", "cloud.communication.cloud_messaging"]

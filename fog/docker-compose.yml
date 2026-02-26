@@ -1,8 +1,7 @@
-version: "3.8"
 services:
   fog_app:
     image: fog_node_app:latest
-    container_name: ${APP_CONTAINER_NAME}
+    container_name: fog_main_app
     build:
       context: .
       dockerfile: Dockerfile
@@ -10,17 +9,19 @@ services:
       - rabbitmq
       - mqtt
     environment:
-      - RABBITMQ_HOST=${RABBITMQ_CONTAINER_NAME}
-      - FOG_HOST=${FOG_HOST}
-      - CLOUD_HOST=${CLOUD_HOST}
-      - FOG_RABBITMQ_HOST=${RABBITMQ_HOST}
-      - CLOUD_RABBITMQ_HOST=${CLOUD_RABBITMQ_HOST}
-      - FOG_MQTT_HOST=${FOG_MQTT_HOST}
-      - FOG_MQTT_PORT=${FOG_MQTT_PORT}
-      - HOST_IFACE=enp3s0
-      - APP_HOST_PORT=${APP_HOST_PORT}
+      - RABBITMQ_HOST=rabbitmq
+      - FOG_HOST=rabbitmq
+      - CLOUD_HOST=rabbitmq_cloud
+      - FOG_RABBITMQ_HOST=rabbitmq
+      - CLOUD_RABBITMQ_HOST=rabbitmq_cloud
+      - FOG_MQTT_HOST=mqtt
+      - FOG_MQTT_PORT=1883
+      - CLOUD_MQTT_HOST=mqtt_cloud
+      - CLOUD_MQTT_PORT=1883
+      - HOST_IFACE=eth0
+      - APP_HOST_PORT=8081
     ports:
-      - "${APP_HOST_PORT}:8081"
+      - "8084:8081"
     dns:
       - 8.8.8.8
       - 1.1.1.1
@@ -30,25 +31,23 @@ services:
     volumes:
       - ./models:/app/models
       - ./models/outbox:/app/models/outbox
-      - /sys:/host_sys:ro
 
   rabbitmq:
     image: rabbitmq:3-management
-    container_name: ${RABBITMQ_CONTAINER_NAME}
+    container_name: rabbitmq_fog
     ports:
-      - "${RABBITMQ_MESSAGING_PORT}:5672"    # Messaging port
-      - "${RABBITMQ_MANAGEMENT_PORT}:15672"  # Management UI
+      - "5672:5672"
+      - "15672:15672"
     networks:
       - aqtf_shared_network
+
   mqtt:
     image: eclipse-mosquitto
-    container_name: ${MQTT_CONTAINER_NAME}
+    container_name: mqtt_fog
     ports:
-      - "${FOG_MQTT_HOST_PORT}:1883"
+      - "1883:1883"
     networks:
       - aqtf_shared_network
-    volumes:
-      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
 
 networks:
   aqtf_shared_network:

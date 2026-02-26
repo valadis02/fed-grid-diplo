@@ -1,4 +1,3 @@
-version: "2.4"
 services:
   edge_app:
     image: edge_node_app:latest
@@ -26,6 +25,8 @@ services:
     mem_limit: 3g
     volumes:
       - ./models:/app/models
+      # Στα Windows το /sys mount συχνά προκαλεί σφάλματα στο build. 
+      # Το αφήνω, αλλά αν σου βγάλει error "path not found", βάλε ένα # μπροστά.
       - /sys:/host_sys:ro
 
 networks:

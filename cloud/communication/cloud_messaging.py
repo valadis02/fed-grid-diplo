@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import threading
 import time
 from tempfile import NamedTemporaryFile
 from typing import Dict
@@ -14,6 +15,24 @@ from shared.node_state import FederatedNodeState
 from cloud.model.model_aggregation_service import aggregate_received_models
 from cloud.communication.cloud_resources_paths import CloudResourcesPaths
 
+# ---------------------------------------------------------------------------
+# Minimal stand-in when the full topology stack isn't initialised (local test)
+# ---------------------------------------------------------------------------
+class _SimpleNode:
+    """Fallback node used when FederatedNodeState has no current node."""
+    def __init__(self, child_names):
+        self.id = "CLOUD_NODE"
+        self.child_nodes = [type("N", (), {"name": n})() for n in child_names]
+
+FALLBACK_FOG_NAMES = os.getenv("FALLBACK_FOG_NAMES", "FOG_NODE_1").split(",")
+
+
+def _get_node():
+    node = FederatedNodeState.get_current_node()
+    if node is None:
+        return _SimpleNode(FALLBACK_FOG_NAMES)
+    return node
+
 
 class CloudMessaging:
     def __init__(
@@ -22,20 +41,14 @@ class CloudMessaging:
             cloud_mqtt_host: str = os.getenv('CLOUD_MQTT_HOST', 'mqtt-cloud'),
             cloud_mqtt_port: int = int(os.getenv('CLOUD_MQTT_PORT', 1883)),
     ):
-        """
-        :param cloud_amqp_host: hostname or IP of the cloud’s RabbitMQ broker.
-        :param cloud_mqtt_host: hostname or IP of the cloud's MQTT broker.
-        :param cloud_mqtt_port: port of the cloud's MQTT broker.
-        """
         self.cloud_amqp_host = cloud_amqp_host
         self.cloud_mqtt_host = cloud_mqtt_host
         self.cloud_mqtt_port = cloud_mqtt_port
-        # Cache for aggregated models keyed by fog ID
-        self.fog_models_cache = {}
-        self._recent_fog_models = {}
+        self.fog_models_cache: Dict[str, dict] = {}
+        self._recent_fog_models: Dict[str, dict] = {}
+        # Accept any round_id when None (first run / test mode)
         self.round_id = None
 
-        # ensure status folder exists and try to restore status
         try:
             os.makedirs(CloudResourcesPaths.STATUS_FOLDER_PATH.value, exist_ok=True)
         except Exception as e:
@@ -43,27 +56,26 @@ class CloudMessaging:
 
         self._restore_round_id()
 
-    # status helpers
+    # ------------------------------------------------------------------
+    # Round-id persistence
+    # ------------------------------------------------------------------
 
-    def _persist_round_id(self, round_id: int):
-        """Atomically persist current round id to disk."""
+    def _persist_round_id(self, round_id):
         path = CloudResourcesPaths.ROUND_FILE_PATH.value
-        data = {"round_id": round_id, "ts": int(time.time())}
+        self.round_id = round_id
         try:
-            # atomic write: write temp file then replace
-            self.round_id = int(round_id)
-            with NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False) as tf:
+            data = {"round_id": round_id, "ts": int(time.time())}
+            with NamedTemporaryFile("w", dir=os.path.dirname(path), delete=False, suffix=".tmp") as tf:
                 json.dump(data, tf)
                 tf.flush()
                 os.fsync(tf.fileno())
-                tmp_path = tf.name
-            os.replace(tmp_path, path)
-            logger.debug("Cloud: persisted round_id=%s to %s", round_id, path)
+                tmp = tf.name
+            os.replace(tmp, path)
+            logger.debug("Cloud: persisted round_id=%s", round_id)
         except Exception as e:
-            logger.warning("Cloud: failed to persist round_id to %s: %s", path, e)
+            logger.warning("Cloud: failed to persist round_id: %s", e)
 
     def _restore_round_id(self):
-        """Restore round id from disk, if present."""
         path = CloudResourcesPaths.ROUND_FILE_PATH.value
         try:
             if os.path.exists(path):
@@ -72,28 +84,21 @@ class CloudMessaging:
                 rid = data.get("round_id")
                 if rid is not None:
                     self.round_id = rid
-                    logger.info("Cloud: restored round_id=%s from %s", rid, path)
+                    logger.info("Cloud: restored round_id=%s from disk", rid)
         except Exception as e:
-            logger.warning("Cloud: failed to restore round_id from %s: %s", path, e)
+            logger.warning("Cloud: failed to restore round_id: %s", e)
 
-    # ---------------------------
-    # Internal helpers
-    # ---------------------------
-
-    def _wait_for_node(self, timeout=300):
-        waited = 0
-        while FederatedNodeState.get_current_node() is None and waited < timeout:
-            logger.info("Cloud: waiting for node initialization...")
-            time.sleep(1)
-            waited += 1
-        return FederatedNodeState.get_current_node()
+    # ------------------------------------------------------------------
+    # AMQP helpers
+    # ------------------------------------------------------------------
 
     def _create_connection(self, retries=10, delay=5) -> pika.BlockingConnection:
-        """Helper to create a new RabbitMQ connection with retry logic for cloud node."""
+        """Connect to the Cloud RabbitMQ broker (internal port 5672)."""
         for attempt in range(1, retries + 1):
             try:
                 return pika.BlockingConnection(pika.ConnectionParameters(
                     host=self.cloud_amqp_host,
+                    port=5672,          # internal Docker port is always 5672
                     heartbeat=30,
                     blocked_connection_timeout=60,
                     connection_attempts=1,
@@ -101,270 +106,312 @@ class CloudMessaging:
                 ))
             except (socket.gaierror, pika.exceptions.AMQPError) as e:
                 if attempt == 1:
-                    logger.warning("Cloud: AMQP unavailable (%s). Will retry up to %d times...",
+                    logger.warning("Cloud: AMQP unavailable (%s). Retrying up to %d times…",
                                    e.__class__.__name__, retries)
                 if attempt == retries:
-                    logger.error("Cloud: could not reach RabbitMQ (%s) after %d attempts.",
-                                 self.cloud_amqp_host, retries)
+                    logger.error("Cloud: could not reach RabbitMQ after %d attempts.", retries)
                     raise
                 time.sleep(delay + random.uniform(0, 1.0))
                 delay = min(delay * 2, 60)
 
-    def _mqtt_publish(self, topic: str, message: dict, qos: int = 1, retain: bool = True,
-                      retries=10, delay=5):
+    def _publish_to_fog_queues(self, channel, message_body: bytes):
+        """Publish directly to each per-fog durable queue."""
+        node = _get_node()
+        fogs = getattr(node, "child_nodes", []) or []
+        if not fogs:
+            logger.warning("Cloud: no fog nodes found; nothing to broadcast.")
+            return
+        for fog in fogs:
+            q = f"cloud_fanout_for_{fog.name}"
+            channel.queue_declare(queue=q, durable=True, auto_delete=False)
+            channel.basic_publish(
+                exchange='',
+                routing_key=q,
+                body=message_body,
+                properties=pika.BasicProperties(delivery_mode=2),
+                mandatory=True,
+            )
+            logger.info("Cloud: enqueued model for fog '%s' → queue '%s'.", fog.name, q)
+
+    # ------------------------------------------------------------------
+    # MQTT helpers
+    # ------------------------------------------------------------------
+
+    def _mqtt_publish(self, topic: str, message: dict, qos: int = 1,
+                      retain: bool = True, retries=10, delay=5):
         client = mqtt.Client(client_id="cloud-publisher", clean_session=True)
         for attempt in range(1, retries + 1):
             try:
                 client.connect(self.cloud_mqtt_host, self.cloud_mqtt_port)
                 break
             except Exception as e:
-                logger.warning("Cloud MQTT connection failed (attempt %d/%d): %s", attempt, retries, e)
+                logger.warning("Cloud MQTT connection failed (%d/%d): %s", attempt, retries, e)
                 if attempt == retries:
-                    logger.error("Cloud: Could not connect to MQTT broker (%s:%s) after %d retries.",
-                                 self.cloud_mqtt_host, self.cloud_mqtt_port, retries)
+                    logger.error("Cloud: could not connect to MQTT broker after %d retries.", retries)
                     return
                 time.sleep(delay)
         client.publish(topic, json.dumps(message), qos=qos, retain=retain)
         client.disconnect()
 
-    def _ensure_per_fog_queues_and_publish(self, channel: pika.adapters.blocking_connection.BlockingChannel,
-                                           message_body: bytes):
-        """
-        Publish to a durable per-fog queue (directly via default exchange).
-        This guarantees persistence even if the fog is offline at publish time.
-        """
-        node = self._wait_for_node()
-        fogs = getattr(node, "child_nodes", []) or []
-
-        if not fogs:
-            logger.warning("Cloud: no fog nodes registered; nothing to broadcast to.")
-            return
-
-        for fog in fogs:
-            q = f"cloud_fanout_for_{fog.name}"  # reusing existing fog queue name
-            # Durable queue (keep across broker restarts).
-            # arguments={"x-queue-type": "quorum"}
-            channel.queue_declare(queue=q, durable=True, auto_delete=False)
-            channel.basic_publish(
-                exchange='',              # direct to queue
-                routing_key=q,            # per-fog queue
-                body=message_body,
-                properties=pika.BasicProperties(delivery_mode=2),  # persistent
-                mandatory=True,
-            )
-            logger.info("Cloud (AMQP): enqueued model for fog '%s' in queue '%s'.", fog.name, q)
-
-    # ---------------------------
+    # ------------------------------------------------------------------
     # Control-plane (MQTT)
-    # ---------------------------
+    # ------------------------------------------------------------------
 
     def notify_all_edges_to_create_local_model(self):
         self._mqtt_publish(topic='cloud/fog/command', message={'command': '0'})
-        logger.info("Cloud (MQTT): sent command to fogs instructing edges to create local model.")
+        logger.info("Cloud (MQTT): sent command '0' → edges create local model.")
 
     def notify_all_edges_to_start_first_training(self, data: Dict[str, any]):
         round_id = data.get("round_id", int(time.time() * 1000))
-        self.round_id = round_id
         self._persist_round_id(round_id)
-        cmd = {'command': '1', 'cmd_id': int(time.time() * 1000), 'round_id': round_id, 'data': data}
+        cmd = {'command': '1', 'cmd_id': int(time.time() * 1000),
+               'round_id': round_id, 'data': data}
         self._mqtt_publish('cloud/fog/command', cmd, qos=1, retain=False)
+        logger.info("Cloud (MQTT): sent command '1' → edges start training (round=%s).", round_id)
 
-    # ---------------------------
-    # Model broadcast (AMQP)
-    # ---------------------------
+    # ------------------------------------------------------------------
+    # Model broadcast (AMQP) — called automatically after aggregation
+    # ------------------------------------------------------------------
 
-    def broadcast_cloud_model(self, data: Dict[str, any]):
+    def broadcast_cloud_model(self, data: Dict[str, any] = None):
         """
-        Broadcast an aggregated cloud model (binary) by publishing directly to
-        each per-fog durable queue. This works even if a fog is offline.
+        Broadcast aggregated cloud model to all fogs via per-fog durable queues.
+        Also sends command '2' via MQTT so fogs/edges know a new round is starting.
         """
-        self.fog_models_cache.clear()
-        round_id = data.get("round_id")
-        self.round_id = round_id
+        if data is None:
+            data = {}
+
+        # Use current round_id (set during aggregation) or generate one
+        round_id = data.get("round_id", self.round_id or int(time.time() * 1000))
         self._persist_round_id(round_id)
 
         model_path = CloudResourcesPaths.CLOUD_MODEL_FILE_PATH.value
         if not os.path.exists(model_path):
-            logger.error("Cloud: no aggregated model found at %s, cannot broadcast.", model_path)
+            logger.error("Cloud: no aggregated model at %s — cannot broadcast.", model_path)
             return
 
         with open(model_path, "rb") as f:
             model_b64 = base64.b64encode(f.read()).decode('utf-8')
 
-        message = {"command": "2", "round_id": round_id, "model": model_b64, "data": data}
+        message = {
+            "command": "2",
+            "round_id": round_id,
+            "model": model_b64,
+            "data": data,
+        }
         message_body = json.dumps(message).encode('utf-8')
 
-        connection = self._create_connection()
+        # 1. AMQP: push model bytes to each fog queue
         try:
-            channel = connection.channel()
-            # Publish to each fog queue (create if missing)
-            self._ensure_per_fog_queues_and_publish(channel, message_body)
-            logger.info("Cloud (AMQP): broadcast cloud model to per-fog queues.")
-        finally:
-            try:
-                connection.close()
-            except Exception:
-                pass
+            conn = self._create_connection()
+            ch = conn.channel()
+            self._publish_to_fog_queues(ch, message_body)
+            conn.close()
+            logger.info("Cloud (AMQP): broadcast cloud model to fogs (round=%s).", round_id)
+        except Exception as e:
+            logger.exception("Cloud: AMQP broadcast failed: %s", e)
 
-    # ---------------------------
-    # Ingest aggregated fog models (AMQP)
-    # ---------------------------
+        # 2. MQTT: notify fogs/edges that a new round is ready (model sent via AMQP)
+        mqtt_cmd = {"command": "2", "round_id": round_id, "cmd_id": int(time.time() * 1000)}
+        self._mqtt_publish('cloud/fog/command', mqtt_cmd, qos=1, retain=False)
+        logger.info("Cloud (MQTT): sent command '2' → edges re-train with new model (round=%s).", round_id)
+
+    # ------------------------------------------------------------------
+    # Aggregation gate
+    # ------------------------------------------------------------------
+
+    def is_ready_to_aggregate(self):
+        node = _get_node()
+        num_expected = len(node.child_nodes) if node else 1
+
+        logger.info("Cloud: received %d/%d fog models.", len(self.fog_models_cache), num_expected)
+
+        if len(self.fog_models_cache) >= num_expected:
+            logger.info("Cloud: all fog models received — starting aggregation.")
+            try:
+                aggregate_received_models(self.fog_models_cache)
+            except Exception as e:
+                logger.exception("Cloud: aggregation failed: %s", e)
+                return False
+
+            self.fog_models_cache.clear()
+            logger.info("Cloud: aggregation complete — broadcasting updated model to fogs.")
+
+            # Automatically trigger the next federated round
+            threading.Thread(
+                target=self.broadcast_cloud_model,
+                kwargs={"data": {"round_id": self.round_id}},
+                daemon=True,
+            ).start()
+            return True
+        return False
+
+    # ------------------------------------------------------------------
+    # AMQP listener — receive fog models
+    # ------------------------------------------------------------------
 
     def start_amqp_listener(self):
         """
-        Listen for aggregated models from fogs and cache them.
-        Early de-dupe by message_id, then by content hash.
+        Blocking loop: consume 'fog_to_cloud_models' queue.
+        Accepts any round_id when self.round_id is None (test / first-run mode).
         """
-        node = self._wait_for_node()
-        if not node:
-            logger.error("Cloud: node not initialized; AMQP listener not started.")
-            return
-
-        if self.round_id is None:
-            # one more attempt to restore in case init happened race-y
-            self._restore_round_id()
-
         os.makedirs(CloudResourcesPaths.MODELS_FOLDER_PATH.value, exist_ok=True)
-        connection = self._create_connection()
-        channel = connection.channel()
-        channel.basic_qos(prefetch_count=1)
-        declare_result = channel.queue_declare(queue='fog_to_cloud_models', durable=True)
 
-        if os.getenv("DEV_PURGE_ON_BOOT", "false").lower() == "true":
-            channel.queue_purge('fog_to_cloud_models')
-            logger.info("Cloud (DEV): purged fog_to_cloud_models on boot.")
+        delay, max_delay = 5, 60
+        announced_down = False
 
-        logger.info("Cloud: declared queue 'fog_to_cloud_models' → message_count=%d, consumer_count=%d",
-                    declare_result.method.message_count,
-                    declare_result.method.consumer_count)
-
-        # message_id -> timestamp (seconds)
-        recent_ids = {}
-        MSG_TTL = 900  # 15 minutes
-
-        def _purge_old_ids(now):
-            to_del = [mid for mid, ts in recent_ids.items() if now - ts > MSG_TTL]
-            for mid in to_del:
-                recent_ids.pop(mid, None)
-
-        def on_fog_model(ch, method, properties, body):
-            now = time.time()
-            _purge_old_ids(now)
-
-            msg_id = getattr(properties, "message_id", None)
-            if msg_id:
-                if msg_id in recent_ids:
-                    ch.basic_ack(delivery_tag=method.delivery_tag)
-                    return
-                recent_ids[msg_id] = now
-
+        while True:
+            conn = None
             try:
-                payload = json.loads(body)
-            except Exception:
-                logger.warning("Cloud: non-JSON AMQP payload; acking.")
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                return
+                conn = self._create_connection()
+                ch = conn.channel()
+                ch.basic_qos(prefetch_count=1)
+                ch.queue_declare(queue='fog_to_cloud_models', durable=True)
+                logger.info("Cloud: listening on queue 'fog_to_cloud_models'…")
 
-            fog_device_mac = payload.get('fog_device_mac')
-            fog_name = payload.get('fog_name')
-            model_b64 = payload.get('model')
-            model_hash = payload.get('hash')
-            round_id = payload.get('round_id')
+                if announced_down:
+                    logger.info("Cloud: AMQP back online.")
+                    announced_down = False
+                    delay = 5
 
-            if self.round_id is None:
-                logger.warning("Cloud: no active round; discarding fog model.")
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                return
-            if round_id != self.round_id:
-                logger.warning("Cloud: round-id mismatch (cloud=%s, got=%s); ignoring model.",
-                               self.round_id, round_id)
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                return
+                recent_ids: Dict[str, float] = {}
+                MSG_TTL = 900
 
-            if not fog_device_mac or not fog_name or not model_b64:
-                logger.warning("Cloud: malformed fog message (missing fields); acking.")
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                return
+                def _purge_old(now):
+                    old = [k for k, t in recent_ids.items() if now - t > MSG_TTL]
+                    for k in old:
+                        recent_ids.pop(k, None)
 
-            # Fallback dedupe by content hash
-            key = f"{fog_device_mac}:{fog_name}"
-            if not model_hash:
-                try:
-                    model_hash = hashlib.sha256(base64.b64decode(model_b64)).hexdigest()
-                except Exception:
-                    logger.warning("Cloud: invalid base64 model; acking.")
+                def on_fog_model(ch, method, properties, body):
+                    now = time.time()
+                    _purge_old(now)
+
+                    # Early de-dupe by AMQP message_id
+                    msg_id = getattr(properties, "message_id", None)
+                    if msg_id:
+                        if msg_id in recent_ids:
+                            logger.debug("Cloud: duplicate msg_id %s; skipping.", msg_id)
+                            ch.basic_ack(delivery_tag=method.delivery_tag)
+                            return
+                        recent_ids[msg_id] = now
+
+                    try:
+                        payload = json.loads(body)
+                    except Exception:
+                        logger.warning("Cloud: non-JSON payload; discarding.")
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        return
+
+                    fog_name      = payload.get('fog_name')
+                    fog_mac       = payload.get('fog_device_mac', '00:00:00:00:00:00')
+                    model_b64     = payload.get('model')
+                    model_hash    = payload.get('hash')
+                    recv_round_id = payload.get('round_id')
+
+                    # Round-id check: skip only when BOTH sides have an id AND they differ
+                    if self.round_id is not None and recv_round_id is not None \
+                            and recv_round_id != self.round_id:
+                        logger.warning(
+                            "Cloud: round-id mismatch (cloud=%s, fog=%s); ignoring.",
+                            self.round_id, recv_round_id)
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        return
+
+                    # Accept the round_id from Fog if Cloud has none yet
+                    if self.round_id is None and recv_round_id is not None:
+                        logger.info("Cloud: adopting round_id=%s from Fog.", recv_round_id)
+                        self._persist_round_id(recv_round_id)
+
+                    if not fog_name or not model_b64:
+                        logger.warning("Cloud: malformed payload (missing fog_name or model).")
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        return
+
+                    # Content-hash de-dupe
+                    key = f"{fog_mac}:{fog_name}"
+                    if not model_hash:
+                        try:
+                            model_hash = hashlib.sha256(base64.b64decode(model_b64)).hexdigest()
+                        except Exception:
+                            logger.warning("Cloud: invalid base64 model from fog %s.", fog_name)
+                            ch.basic_ack(delivery_tag=method.delivery_tag)
+                            return
+
+                    prev = self._recent_fog_models.get(key)
+                    if prev and prev["hash"] == model_hash and (now - prev["ts"] < MSG_TTL):
+                        logger.debug("Cloud: duplicate content hash from %s; skipping.", fog_name)
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        return
+
+                    # Persist model
+                    try:
+                        model_bytes = base64.b64decode(model_b64)
+                        model_path = os.path.join(
+                            CloudResourcesPaths.MODELS_FOLDER_PATH.value,
+                            f'{fog_name}_aggregated_model.keras'
+                        )
+                        with open(model_path, 'wb') as f:
+                            f.write(model_bytes)
+                            f.flush()
+                            os.fsync(f.fileno())
+
+                        map_id = f"{fog_mac}_{fog_name}"
+                        self.fog_models_cache[map_id] = {"model_path": model_path}
+                        self._recent_fog_models[key] = {"hash": model_hash, "ts": now}
+                        logger.info("Cloud: cached model from fog '%s' (round=%s).",
+                                    fog_name, recv_round_id)
+                    except Exception as e:
+                        logger.error("Cloud: failed to save model from fog %s: %s", fog_name, e)
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        return
+
                     ch.basic_ack(delivery_tag=method.delivery_tag)
-                    return
+                    self.is_ready_to_aggregate()
 
-            prev = self._recent_fog_models.get(key)
-            if prev and prev["hash"] == model_hash and (now - prev["ts"] < 900):
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-                return
-
-            try:
-                model_bytes = base64.b64decode(model_b64)
-                model_path = os.path.join(
-                    CloudResourcesPaths.MODELS_FOLDER_PATH.value,
-                    f'{fog_name}_aggregated_model.keras'
+                ch.basic_consume(
+                    queue='fog_to_cloud_models',
+                    on_message_callback=on_fog_model,
+                    auto_ack=False,
                 )
-                with open(model_path, 'wb') as f:
-                    f.write(model_bytes)
-                    f.flush()
-                    os.fsync(f.fileno())
+                ch.start_consuming()
 
-                map_id = fog_device_mac + '_' + fog_name
-                self.fog_models_cache[map_id] = {"model_path": model_path}
-                self._recent_fog_models[key] = {"hash": model_hash, "ts": now}
-                logger.info("Cloud: cached aggregated model from fog %s at %s.", fog_name, model_path)
-            except Exception as e:
-                logger.error("Cloud: failed to decode/save model from fog %s: %s", fog_name, e)
+            except (socket.gaierror, pika.exceptions.AMQPError) as e:
+                if not announced_down:
+                    logger.warning("Cloud: AMQP unavailable (%s). Backing off…", e.__class__.__name__)
+                    announced_down = True
+                time.sleep(delay + random.uniform(0, 1.0))
+                delay = min(delay * 2, max_delay)
+            except Exception:
+                logger.exception("Cloud: unexpected error in AMQP listener; retrying in %ss…", delay)
+                time.sleep(delay)
+                delay = min(delay * 2, max_delay)
+            finally:
+                try:
+                    if conn and conn.is_open:
+                        conn.close()
+                except Exception:
+                    pass
 
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            self.is_ready_to_aggregate()
-
-        channel.basic_consume(
-            queue='fog_to_cloud_models', on_message_callback=on_fog_model, auto_ack=False
-        )
-        logger.info("Cloud: listening for aggregated models from fogs...")
-        channel.start_consuming()
-
-    # ---------------------------
-    # Aggregation gate
-    # ---------------------------
-
-    def is_ready_to_aggregate(self):
-        if len(self.fog_models_cache) == len(FederatedNodeState.get_current_node().child_nodes):
-            logger.info("Cloud has received all fog models and is ready to aggregate them.")
-            aggregate_received_models(self.fog_models_cache)
-            self.fog_models_cache.clear()
-            logger.info("Cloud has succeeded to aggregate fog models and obtained cloud model.")
-
-    # ---------------------------
-    # MQTT listener
-    # ---------------------------
+    # ------------------------------------------------------------------
+    # MQTT listener (stub — extend if cloud needs to receive MQTT)
+    # ------------------------------------------------------------------
 
     def start_mqtt_listener(self):
-        """
-        Listen for MQTT messages from fogs or edges.
-        """
-        node = self._wait_for_node()
-        if not node:
-            logger.error("Cloud: node not initialized; MQTT listener not started.")
-            return
+        logger.info("Cloud: MQTT listener started (no-op in current setup).")
+        while True:
+            time.sleep(60)
 
-        def on_connect(client, userdata, flags, rc):
-            if rc == 0:
-                logger.info("Cloud MQTT: connected successfully.")
-                client.subscribe("fog/cloud/updates")
-            else:
-                logger.error("Cloud MQTT: failed to connect, code %s", rc)
 
-        def on_message(client, userdata, msg):
-            logger.info("Cloud MQTT: received on %s: %s", msg.topic, msg.payload.decode())
+# ---------------------------------------------------------------------------
+# Standalone entry-point (matches docker-compose command)
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import sys
 
-        mqtt_client = mqtt.Client()
-        mqtt_client.on_connect = on_connect
-        mqtt_client.on_message = on_message
+    logging_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if logging_root not in sys.path:
+        sys.path.insert(0, logging_root)
 
-        mqtt_client.connect(self.cloud_mqtt_host, self.cloud_mqtt_port)
-        mqtt_client.loop_forever()
+    cloud_msg = CloudMessaging()
+    logger.info("Cloud: Starting AMQP listener (standalone mode)…")
+    cloud_msg.start_amqp_listener()
