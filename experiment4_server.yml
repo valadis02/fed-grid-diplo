@@ -1,0 +1,96 @@
+# experiment4_server.yml
+# Πείραμα 4: ΜΟΝΟ Fog + Cloud (χωρίς edge)
+# Τρέχει στον PC — το edge τρέχει στο RPi
+
+networks:
+  aqtf_shared_network:
+    external: true
+
+services:
+
+  exp4_cloud_app:
+    image: cloud_node_app:latest
+    container_name: exp4_cloud_app
+    environment:
+      - CLOUD_RABBITMQ_HOST=exp4_rabbitmq_cloud
+      - CLOUD_MQTT_HOST=exp4_mqtt_cloud
+      - CLOUD_MQTT_PORT=1883
+      - FALLBACK_FOG_NAMES=FOG_NODE_1
+      - AES_ENCRYPTION_KEY=7rcGr04QSt1yZklZptDoZUxHhrwDgECoIl0CxbdXarw=
+    ports:
+      - "8092:8081"
+    depends_on:
+      - exp4_rabbitmq_cloud
+      - exp4_mqtt_cloud
+    networks:
+      - aqtf_shared_network
+    command: python3 -m cloud.communication.cloud_messaging
+    volumes:
+      - ./cloud/models:/app/models
+      - ./cloud/status:/app/status
+    restart: on-failure
+
+  exp4_rabbitmq_cloud:
+    image: rabbitmq:3-management
+    container_name: exp4_rabbitmq_cloud
+    ports:
+      - "5675:5672"
+      - "15675:15672"
+    networks:
+      - aqtf_shared_network
+
+  exp4_mqtt_cloud:
+    image: eclipse-mosquitto:latest
+    container_name: exp4_mqtt_cloud
+    ports:
+      - "1886:1883"
+    networks:
+      - aqtf_shared_network
+    volumes:
+      - ./cloud/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  exp4_fog_app:
+    image: fog_node_app:latest
+    container_name: exp4_fog_app
+    environment:
+      - FOG_RABBITMQ_HOST=exp4_rabbitmq_fog
+      - CLOUD_RABBITMQ_HOST=exp4_rabbitmq_cloud
+      - FOG_MQTT_HOST=exp4_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - CLOUD_MQTT_HOST=exp4_mqtt_cloud
+      - CLOUD_MQTT_PORT=1883
+      - FOG_NAME=FOG_NODE_1
+      - EDGE_NAMES=edge_node_1
+      - AES_ENCRYPTION_KEY=7rcGr04QSt1yZklZptDoZUxHhrwDgECoIl0CxbdXarw=
+    ports:
+      - "8094:8081"
+    depends_on:
+      - exp4_rabbitmq_fog
+      - exp4_mqtt_fog
+      - exp4_rabbitmq_cloud
+    networks:
+      - aqtf_shared_network
+    command: uvicorn fog.communication.app_factory:app --host 0.0.0.0 --port 8081
+    volumes:
+      - ./fog/models:/app/models
+      - ./fog/models/outbox:/app/models/outbox
+    restart: on-failure
+
+  exp4_rabbitmq_fog:
+    image: rabbitmq:3-management
+    container_name: exp4_rabbitmq_fog
+    ports:
+      - "5674:5672"
+      - "15674:15672"
+    networks:
+      - aqtf_shared_network
+
+  exp4_mqtt_fog:
+    image: eclipse-mosquitto:latest
+    container_name: exp4_mqtt_fog
+    ports:
+      - "1885:1883"
+    networks:
+      - aqtf_shared_network
+    volumes:
+      - ./fog/mosquitto.conf:/mosquitto/config/mosquitto.conf

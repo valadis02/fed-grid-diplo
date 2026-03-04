@@ -10,3 +10,4 @@ websockets==10.4.0
 aio-pika==9.5.4
 psutil==7.0.0
 paho-mqtt
+cryptography>=42.0.0

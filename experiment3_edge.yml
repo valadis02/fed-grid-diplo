@@ -1,0 +1,43 @@
+# =============================================================
+# Πείραμα 3: Edge Node — τρέχει στην κάθε φυσική συσκευή
+#
+# Πριν εκτελέσεις, ορίσε την IP του PC στο .env ή αλλάζοντας
+# το FOG_RABBITMQ_HOST παρακάτω.
+#
+# Εκτέλεση στο RPi:
+#   PC_IP=192.168.1.X docker-compose -f experiment3_edge.yml up
+#
+# Σειρά εκτέλεσης:
+#   PC    → docker-compose -f experiment3.yml up
+#   RPi   → PC_IP=<ip_του_pc> docker-compose -f experiment3_edge.yml up
+# =============================================================
+
+networks:
+  aqtf_shared_network:
+    external: true
+
+services:
+
+  edge_node_1:
+    image: edge-node:latest
+    container_name: exp3_edge_1
+    environment:
+      # Για PC: αφήνεις κενό (default). Για RPi: PC_IP=192.168.1.12
+      - FOG_RABBITMQ_HOST=${PC_IP:-exp3_rabbitmq_fog}
+      - FOG_MQTT_HOST=${PC_IP:-exp3_mqtt_fog}
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_1
+      - MAX_ROUNDS=10
+      - WAIT_TIMEOUT_SECS=600
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      # Η συσκευή καταγράφεται στα αποτελέσματα
+      - DEVICE_LABEL=${DEVICE_LABEL:-unknown_device}
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_1:/app/edge/data
+      - ./edge/models:/app/edge/models
+    networks:
+      - aqtf_shared_network
+    # ΔΕΝ υπάρχουν resource limits — μετράμε τη φυσική απόδοση της συσκευής
+    restart: on-failure

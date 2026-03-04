@@ -7,7 +7,7 @@ RUN mkdir -p "/app/models" && \
     mkdir -p "/app/models/outbox"
 
 # 1. Requirements (Αφαιρέθηκε το fog/)
-COPY requirements.txt /app/
+COPY fog/requirements.txt /app/
 
 # 2. Topology (Συγκεκριμένο όνομα αρχείου)
 COPY federated_topology.json /app/

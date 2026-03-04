@@ -12,6 +12,7 @@ import paho.mqtt.client as mqtt
 from pika import exceptions as px
 from shared.logging_config import logger
 from shared.node_state import FederatedNodeState
+from shared.crypto import encrypt_to_b64, decrypt_from_b64
 from fog.communication.fog_resources_paths import FogResourcesPaths
 from fog.model.model_aggregation_service import aggregate_models_with_metrics
 from shared.utils import delete_files_containing
@@ -19,7 +20,7 @@ from shared.utils import delete_files_containing
 # ---------------------------------------------------------------------------
 # Fallback helpers — used when FederatedNodeState has no node (local testing)
 # ---------------------------------------------------------------------------
-FOG_NAME_DEFAULT  = os.getenv("FOG_NAME",  "FOG_NODE_1")
+FOG_NAME_DEFAULT   = os.getenv("FOG_NAME",   "FOG_NODE_1")
 EDGE_NAMES_DEFAULT = os.getenv("EDGE_NAMES", "edge_node_1").split(",")
 
 def _fog_name() -> str:
@@ -47,10 +48,10 @@ def _purge_outbox_all():
 
 class FogMessaging:
     def __init__(self,
-                 fog_amqp_host:  str = os.getenv('FOG_RABBITMQ_HOST',  'rabbitmq-fog1'),
+                 fog_amqp_host:   str = os.getenv('FOG_RABBITMQ_HOST',  'rabbitmq-fog1'),
                  cloud_amqp_host: str = os.getenv('CLOUD_RABBITMQ_HOST', 'rabbitmq-cloud'),
-                 fog_mqtt_host:  str = os.getenv('FOG_MQTT_HOST',  'mqtt-fog1'),
-                 fog_mqtt_port:  int = int(os.getenv('FOG_MQTT_PORT',  1883)),
+                 fog_mqtt_host:   str = os.getenv('FOG_MQTT_HOST',  'mqtt-fog1'),
+                 fog_mqtt_port:   int = int(os.getenv('FOG_MQTT_PORT',  1883)),
                  cloud_mqtt_host: str = os.getenv('CLOUD_MQTT_HOST', 'mqtt-cloud'),
                  cloud_mqtt_port: int = int(os.getenv('CLOUD_MQTT_PORT', 1883))):
 
@@ -62,9 +63,9 @@ class FogMessaging:
         self.cloud_mqtt_port = cloud_mqtt_port
 
         self.edge_models_cache = {}
-        self._last_cmd_id   = None
+        self._last_cmd_id    = None
         self._outbox_enabled = os.getenv('FOG_RESUME_OUTBOX_ON_BOOT', 'false').lower() == 'true'
-        self.current_round  = None
+        self.current_round   = None
         self.OUTBOX_TTL_SECS = int(os.getenv('FOG_OUTBOX_TTL_SECS', '86400'))
 
         _purge_outbox_all()
@@ -139,8 +140,8 @@ class FogMessaging:
         cloud_client = mqtt.Client(client_id=f"fog-cloud-{fog_name}", clean_session=False)
         fog_client   = mqtt.Client(client_id=f"fog-local-{fog_name}", clean_session=False)
 
-        cloud_client.will_set(f"fogs/{fog_name}/status",       payload="offline", qos=1, retain=True)
-        fog_client.will_set(f"fog/{fog_name}/local_status",    payload="offline", qos=1, retain=True)
+        cloud_client.will_set(f"fogs/{fog_name}/status",    payload="offline", qos=1, retain=True)
+        fog_client.will_set(f"fog/{fog_name}/local_status", payload="offline", qos=1, retain=True)
 
         cloud_client.reconnect_delay_set(min_delay=1, max_delay=60)
         fog_client.reconnect_delay_set(min_delay=1, max_delay=60)
@@ -196,7 +197,6 @@ class FogMessaging:
                 return
             self._last_cmd_id = cmd_id
 
-            # Relay command to all edges via MQTT
             for edge_name in _edge_names():
                 topic = f"fog/{edge_name}/command"
                 try:
@@ -292,8 +292,8 @@ class FogMessaging:
             announced_down = False
             next_warn_at   = 0.0
 
-            use_quorum  = os.getenv("FOG_USE_QUORUM_QUEUES", "false").lower() == "true"
-            queue_args  = {"x-queue-type": "quorum"} if use_quorum else None
+            use_quorum = os.getenv("FOG_USE_QUORUM_QUEUES", "false").lower() == "true"
+            queue_args = {"x-queue-type": "quorum"} if use_quorum else None
 
             while True:
                 cloud_conn = None
@@ -332,13 +332,11 @@ class FogMessaging:
                             ch.basic_ack(delivery_tag=method.delivery_tag)
                             return
 
-                        # Enable outbox uplink
                         if msg.get("command") == "2" or "model" in msg:
                             if not self._outbox_enabled:
                                 logger.info("Fog: enabling outbox worker (cloud broadcast).")
                             self._outbox_enabled = True
 
-                        # Persist received cloud model locally
                         if msg.get("model"):
                             try:
                                 os.makedirs(
@@ -351,14 +349,12 @@ class FogMessaging:
                             except Exception as e:
                                 logger.exception("Fog: failed writing fog model: %s", e)
 
-                        # Track round_id
                         rid = msg.get("round_id")
                         if rid is not None and rid != self.current_round:
                             logger.info("Fog: new round_id=%s (was %s) → purging outbox.", rid, self.current_round)
                             self.current_round = rid
                             _purge_outbox_all()
 
-                        # ── KEY FIX: Forward to ALL edge queues ──────────────────
                         edge_names = _edge_names()
                         if not edge_names:
                             logger.warning("Fog: no edge names available; cannot forward cloud model.")
@@ -387,7 +383,6 @@ class FogMessaging:
                                                 edge_name, edge_q)
                         except Exception as e:
                             logger.exception("Fog: failed forwarding to edges: %s", e)
-                        # ────────────────────────────────────────────────────────
 
                         ch.basic_ack(delivery_tag=method.delivery_tag)
 
@@ -455,15 +450,28 @@ class FogMessaging:
                             edge_name = payload.get('edge_name', 'unknown')
                             metrics   = payload.get('metrics', {})
                             model_b64 = payload.get('model')
+                            encrypted = payload.get('encrypted', False)
 
                             if not model_b64:
                                 logger.warning("Fog: edge model payload missing 'model' field.")
                                 ch.basic_ack(delivery_tag=method.delivery_tag)
                                 return
 
-                            # Save edge model to disk
-                            model_bytes = base64.b64decode(model_b64)
-                            model_path  = os.path.join(
+                            # ── ΑΠΟΚΡΥΠΤΟΓΡΑΦΗΣΗ (Experiment 4) ─────────────────────
+                            if encrypted:
+                                model_bytes, dec_metrics = decrypt_from_b64(model_b64)
+                                logger.info(
+                                    "Fog: decrypted model from edge %s | "
+                                    "decrypt=%.4fs | size=%.1fKB",
+                                    edge_name,
+                                    dec_metrics['decrypt_time_s'],
+                                    dec_metrics['plaintext_size_b'] / 1024,
+                                )
+                            else:
+                                model_bytes = base64.b64decode(model_b64)
+                            # ────────────────────────────────────────────────────────
+
+                            model_path = os.path.join(
                                 FogResourcesPaths.MODELS_FOLDER_PATH.value,
                                 f"{edge_name}_model.keras",
                             )
@@ -477,7 +485,6 @@ class FogMessaging:
                             }
                             logger.info("Fog: cached model for edge %s with metrics %s", edge_name, metrics)
 
-                            # Enable outbox so the uplink worker sends to Cloud
                             if not self._outbox_enabled:
                                 logger.info("Fog: enabling outbox worker (received edge model).")
                             self._outbox_enabled = True
@@ -490,9 +497,7 @@ class FogMessaging:
 
                     ch.basic_consume(queue='edge_to_fog_models', on_message_callback=on_edge_model, auto_ack=False)
                     logger.info("Fog: listening for trained models from edges...")
-
-                    if True:  # reset backoff on successful connect
-                        delay = 5
+                    delay = 5
                     ch.start_consuming()
 
                 except Exception as e:
@@ -596,7 +601,7 @@ class FogMessaging:
         logger.info("Fog: queued model %s for later uplink.", model_hash)
 
     # -----------------------------------------------------------------------
-    # Cloud uplink worker  (Fog → Cloud AMQP with publisher confirms)
+    # Cloud uplink worker  (Fog → Cloud AMQP, AES-256-GCM encrypted)
     # -----------------------------------------------------------------------
 
     def start_cloud_uplink_worker(self):
@@ -644,16 +649,16 @@ class FogMessaging:
                             except: pass
                             continue
 
-                        round_id  = meta.get("round_id")
+                        round_id = meta.get("round_id")
                         if round_id != self.current_round:
                             continue
 
-                        ts        = meta.get("ts", 0)
-                        blob_path = meta.get("model_file") or meta.get("model_path")
-                        fog_name  = meta.get("fog_name")
-                        fog_mac   = meta.get("fog_device_mac")
+                        ts         = meta.get("ts", 0)
+                        blob_path  = meta.get("model_file") or meta.get("model_path")
+                        fog_name   = meta.get("fog_name")
+                        fog_mac    = meta.get("fog_device_mac")
                         model_hash = meta.get("hash")
-                        msg_id    = meta.get("message_id", f"{fog_mac}:{fog_name}:{model_hash}")
+                        msg_id     = meta.get("message_id", f"{fog_mac}:{fog_name}:{model_hash}")
 
                         if self.OUTBOX_TTL_SECS > 0 and (time.time() - ts) > self.OUTBOX_TTL_SECS:
                             logger.info("Fog: pruning expired outbox item %s.", meta_path)
@@ -672,13 +677,26 @@ class FogMessaging:
                         with open(blob_path, "rb") as mf:
                             model_bytes = mf.read()
 
-                        body  = json.dumps({
+                        # ── ΚΡΥΠΤΟΓΡΑΦΗΣΗ πριν αποστολή στο cloud (Experiment 4) ──
+                        model_b64_enc, enc_metrics = encrypt_to_b64(model_bytes)
+                        logger.info(
+                            "Fog: encrypted model for cloud | "
+                            "encrypt=%.4fs | size=%.1fKB",
+                            enc_metrics['encrypt_time_s'],
+                            enc_metrics['ciphertext_size_b'] / 1024,
+                        )
+                        # ──────────────────────────────────────────────────────────
+
+                        body = json.dumps({
                             "fog_name":       fog_name,
                             "fog_device_mac": fog_mac,
-                            "model":          base64.b64encode(model_bytes).decode("utf-8"),
+                            "model":          model_b64_enc,
+                            "encrypted":      True,
                             "hash":           model_hash,
                             "round_id":       round_id,
+                            "crypto_metrics": enc_metrics,
                         }).encode("utf-8")
+
                         props = pika.BasicProperties(
                             delivery_mode=2,
                             content_type="application/json",

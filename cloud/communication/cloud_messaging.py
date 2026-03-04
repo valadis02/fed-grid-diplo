@@ -12,7 +12,9 @@ import pika
 import paho.mqtt.client as mqtt
 from shared.logging_config import logger
 from shared.node_state import FederatedNodeState
+from shared.crypto import decrypt_from_b64
 from cloud.model.model_aggregation_service import aggregate_received_models
+from cloud.model.cloud_evaluation_service import evaluate_global_model
 from cloud.communication.cloud_resources_paths import CloudResourcesPaths
 
 # ---------------------------------------------------------------------------
@@ -46,8 +48,8 @@ class CloudMessaging:
         self.cloud_mqtt_port = cloud_mqtt_port
         self.fog_models_cache: Dict[str, dict] = {}
         self._recent_fog_models: Dict[str, dict] = {}
-        # Accept any round_id when None (first run / test mode)
         self.round_id = None
+        self._round_counter = 0
 
         try:
             os.makedirs(CloudResourcesPaths.STATUS_FOLDER_PATH.value, exist_ok=True)
@@ -98,7 +100,7 @@ class CloudMessaging:
             try:
                 return pika.BlockingConnection(pika.ConnectionParameters(
                     host=self.cloud_amqp_host,
-                    port=5672,          # internal Docker port is always 5672
+                    port=5672,
                     heartbeat=30,
                     blocked_connection_timeout=60,
                     connection_attempts=1,
@@ -181,7 +183,6 @@ class CloudMessaging:
         if data is None:
             data = {}
 
-        # Use current round_id (set during aggregation) or generate one
         round_id = data.get("round_id", self.round_id or int(time.time() * 1000))
         self._persist_round_id(round_id)
 
@@ -201,7 +202,6 @@ class CloudMessaging:
         }
         message_body = json.dumps(message).encode('utf-8')
 
-        # 1. AMQP: push model bytes to each fog queue
         try:
             conn = self._create_connection()
             ch = conn.channel()
@@ -211,7 +211,6 @@ class CloudMessaging:
         except Exception as e:
             logger.exception("Cloud: AMQP broadcast failed: %s", e)
 
-        # 2. MQTT: notify fogs/edges that a new round is ready (model sent via AMQP)
         mqtt_cmd = {"command": "2", "round_id": round_id, "cmd_id": int(time.time() * 1000)}
         self._mqtt_publish('cloud/fog/command', mqtt_cmd, qos=1, retain=False)
         logger.info("Cloud (MQTT): sent command '2' → edges re-train with new model (round=%s).", round_id)
@@ -234,10 +233,17 @@ class CloudMessaging:
                 logger.exception("Cloud: aggregation failed: %s", e)
                 return False
 
+            self._round_counter += 1
+            current_round = self._round_counter
+            threading.Thread(
+                target=evaluate_global_model,
+                args=(current_round,),
+                daemon=True,
+            ).start()
+
             self.fog_models_cache.clear()
             logger.info("Cloud: aggregation complete — broadcasting updated model to fogs.")
 
-            # Automatically trigger the next federated round
             threading.Thread(
                 target=self.broadcast_cloud_model,
                 kwargs={"data": {"round_id": self.round_id}},
@@ -247,13 +253,13 @@ class CloudMessaging:
         return False
 
     # ------------------------------------------------------------------
-    # AMQP listener — receive fog models
+    # AMQP listener — receive fog models (AES-256-GCM decryption)
     # ------------------------------------------------------------------
 
     def start_amqp_listener(self):
         """
         Blocking loop: consume 'fog_to_cloud_models' queue.
-        Accepts any round_id when self.round_id is None (test / first-run mode).
+        Αποκρυπτογραφεί τα βάρη με AES-256-GCM (Experiment 4).
         """
         os.makedirs(CloudResourcesPaths.MODELS_FOLDER_PATH.value, exist_ok=True)
 
@@ -286,7 +292,6 @@ class CloudMessaging:
                     now = time.time()
                     _purge_old(now)
 
-                    # Early de-dupe by AMQP message_id
                     msg_id = getattr(properties, "message_id", None)
                     if msg_id:
                         if msg_id in recent_ids:
@@ -307,8 +312,8 @@ class CloudMessaging:
                     model_b64     = payload.get('model')
                     model_hash    = payload.get('hash')
                     recv_round_id = payload.get('round_id')
+                    encrypted     = payload.get('encrypted', False)
 
-                    # Round-id check: skip only when BOTH sides have an id AND they differ
                     if self.round_id is not None and recv_round_id is not None \
                             and recv_round_id != self.round_id:
                         logger.warning(
@@ -317,7 +322,6 @@ class CloudMessaging:
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                         return
 
-                    # Accept the round_id from Fog if Cloud has none yet
                     if self.round_id is None and recv_round_id is not None:
                         logger.info("Cloud: adopting round_id=%s from Fog.", recv_round_id)
                         self._persist_round_id(recv_round_id)
@@ -327,7 +331,7 @@ class CloudMessaging:
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                         return
 
-                    # Content-hash de-dupe
+                    # Content-hash de-dupe (πάνω στο encrypted payload)
                     key = f"{fog_mac}:{fog_name}"
                     if not model_hash:
                         try:
@@ -343,9 +347,26 @@ class CloudMessaging:
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                         return
 
-                    # Persist model
+                    # ── ΑΠΟΚΡΥΠΤΟΓΡΑΦΗΣΗ (Experiment 4) ──────────────────────────
                     try:
-                        model_bytes = base64.b64decode(model_b64)
+                        if encrypted:
+                            model_bytes, dec_metrics = decrypt_from_b64(model_b64)
+                            logger.info(
+                                "Cloud: decrypted model from fog %s | "
+                                "decrypt=%.4fs | size=%.1fKB",
+                                fog_name,
+                                dec_metrics['decrypt_time_s'],
+                                dec_metrics['plaintext_size_b'] / 1024,
+                            )
+                        else:
+                            model_bytes = base64.b64decode(model_b64)
+                    except Exception as e:
+                        logger.error("Cloud: decryption failed for fog %s: %s", fog_name, e)
+                        ch.basic_ack(delivery_tag=method.delivery_tag)
+                        return
+                    # ─────────────────────────────────────────────────────────────
+
+                    try:
                         model_path = os.path.join(
                             CloudResourcesPaths.MODELS_FOLDER_PATH.value,
                             f'{fog_name}_aggregated_model.keras'
@@ -393,7 +414,7 @@ class CloudMessaging:
                     pass
 
     # ------------------------------------------------------------------
-    # MQTT listener (stub — extend if cloud needs to receive MQTT)
+    # MQTT listener (stub)
     # ------------------------------------------------------------------
 
     def start_mqtt_listener(self):
@@ -403,7 +424,7 @@ class CloudMessaging:
 
 
 # ---------------------------------------------------------------------------
-# Standalone entry-point (matches docker-compose command)
+# Standalone entry-point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import sys

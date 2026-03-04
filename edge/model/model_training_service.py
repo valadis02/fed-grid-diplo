@@ -1,8 +1,11 @@
 import os
+import time
+import threading
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import psutil
 import tensorflow as tf
 
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
@@ -41,6 +44,41 @@ def compute_metrics(y_true, y_pred):
 
 
 # =========================
+# RAM Monitor
+# =========================
+class PeakRamMonitor:
+    """
+    Τρέχει σε background thread και καταγράφει το peak RAM (MB)
+    της τρέχουσας διεργασίας κατά τη διάρκεια του model.fit().
+    """
+    def __init__(self, interval: float = 0.5):
+        self._interval = interval
+        self._peak_mb = 0.0
+        self._stop_event = threading.Event()
+        self._process = psutil.Process(os.getpid())
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                ram_mb = self._process.memory_info().rss / (1024 ** 2)
+                if ram_mb > self._peak_mb:
+                    self._peak_mb = ram_mb
+            except psutil.NoSuchProcess:
+                break
+            time.sleep(self._interval)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self) -> float:
+        """Σταματά το monitoring και επιστρέφει το peak RAM σε MB."""
+        self._stop_event.set()
+        self._thread.join()
+        return round(self._peak_mb, 2)
+
+
+# =========================
 # Streaming CSV generator
 # =========================
 def data_generator(file_path, feature_columns, target_column, sequence_length):
@@ -50,7 +88,6 @@ def data_generator(file_path, feature_columns, target_column, sequence_length):
     """
     df = pd.read_csv(file_path)
 
-    # Validate columns
     missing = [c for c in feature_columns + [target_column] if c not in df.columns]
     if missing:
         logger.error(f"Missing columns in {file_path}: {missing}")
@@ -108,13 +145,13 @@ def train_local_edge_model(
     # -------- Training data --------
     filter_data_by_interval_date(
         EdgeResourcesPaths.INPUT_DATA_PATH.value,
-        "datetime",
+        "timestamp",
         training_day1,
         training_day2,
         training_data_path,
     )
 
-    preprocess_data(training_data_path, "datetime", "apparent power (kWh)")
+    preprocess_data(training_data_path, "timestamp", "consumption_kwh")
     train_df = pd.read_csv(training_data_path)
     logger.info(f"Training data shape: {train_df.shape}")
     logger.info(f"Training data columns: {train_df.columns.tolist()}")
@@ -122,7 +159,7 @@ def train_local_edge_model(
     # -------- Evaluation data --------
     filter_data_by_interval_date(
         EdgeResourcesPaths.INPUT_DATA_PATH.value,
-        "datetime",
+        "timestamp",
         evaluation_day1,
         evaluation_day2,
         evaluation_data_path,
@@ -135,13 +172,12 @@ def train_local_edge_model(
         fallback_eval = True
 
     if not fallback_eval:
-        preprocess_data(evaluation_data_path, "datetime", "apparent power (kWh)")
+        preprocess_data(evaluation_data_path, "timestamp", "consumption_kwh")
 
     eval_df = pd.read_csv(evaluation_data_path)
     logger.info(f"Evaluation data shape: {eval_df.shape}")
 
     # -------- Features --------
-    # required_columns has 'value' as target — remove it for features
     feature_columns = [c for c in required_columns if c != "value"]
     num_features = len(feature_columns)
     logger.info(f"Using {num_features} input features: {feature_columns}")
@@ -182,7 +218,6 @@ def train_local_edge_model(
     )
 
     # -------- Metrics BEFORE training --------
-    # Φτιάχνουμε fresh dataset — δεν κάνουμε reuse
     logger.info("Computing metrics before training...")
     y_true_before, y_pred_before = [], []
     for X_batch, y_batch in make_dataset(evaluation_data_path).take(eval_steps):
@@ -196,20 +231,27 @@ def train_local_edge_model(
     )
     logger.info(f"Metrics before training: {before_metrics}")
 
-    # -------- Training --------
+    # -------- Training (με χρονομέτρη + RAM monitor) --------
     logger.info("Starting local edge training...")
+    ram_monitor = PeakRamMonitor(interval=0.5)
+    ram_monitor.start()
+    t_train_start = time.perf_counter()
+
     model.fit(
         make_dataset(training_data_path).repeat(),
         epochs=40,
         steps_per_epoch=train_steps,
-        # Fresh dataset για validation — ΔΕΝ reuse exhausted dataset
         validation_data=make_dataset(evaluation_data_path).repeat(),
         validation_steps=eval_steps,
         verbose=1,
     )
 
+    training_time_secs = round(time.perf_counter() - t_train_start, 2)
+    peak_ram_mb = ram_monitor.stop()
+
+    logger.info(f"Training time: {training_time_secs}s | Peak RAM: {peak_ram_mb} MB")
+
     # -------- Metrics AFTER training --------
-    # Και εδώ fresh dataset
     logger.info("Computing metrics after training...")
     y_true_after, y_pred_after = [], []
     for X_batch, y_batch in make_dataset(evaluation_data_path).take(eval_steps):
@@ -235,4 +277,7 @@ def train_local_edge_model(
     return {
         "before_training": before_metrics,
         "after_training": after_metrics,
+        # --- Νέες μετρικές Πειράματος 3 ---
+        "training_time_secs": training_time_secs,
+        "peak_ram_mb": peak_ram_mb,
     }

@@ -1,0 +1,187 @@
+{
+  "edge_name": "edge_node_1",
+  "timestamp": "2026-02-27T16:46:08.501610",
+  "max_rounds": 10,
+  "rounds": [
+    {
+      "round": 1,
+      "training_time_secs": 87.52,
+      "peak_ram_mb": 843.42,
+      "after_metrics": {
+        "mse": 0.05627840757369995,
+        "mae": 0.18428944051265717,
+        "r2": 0.8955332040786743,
+        "logcosh": 0.02729160711169243,
+        "huber": 0.028139203786849976,
+        "msle": 0.017134951427578926
+      },
+      "serialization_time_secs": 0.0124,
+      "send_time_secs": 0.3607,
+      "total_send_time_secs": 0.3731,
+      "payload_size_bytes": 2216180,
+      "total_round_time_secs": 95.05
+    },
+    {
+      "round": 2,
+      "training_time_secs": 86.58,
+      "peak_ram_mb": 892.92,
+      "after_metrics": {
+        "mse": 0.07191767543554306,
+        "mae": 0.19035503268241882,
+        "r2": 0.8665028214454651,
+        "logcosh": 0.0344172827899456,
+        "huber": 0.03595883771777153,
+        "msle": 0.03029574640095234
+      },
+      "serialization_time_secs": 0.0117,
+      "send_time_secs": 0.3248,
+      "total_send_time_secs": 0.3365,
+      "payload_size_bytes": 2216181,
+      "total_round_time_secs": 94.23
+    },
+    {
+      "round": 3,
+      "training_time_secs": 88.72,
+      "peak_ram_mb": 951.25,
+      "after_metrics": {
+        "mse": 0.0887615755200386,
+        "mae": 0.21040892601013184,
+        "r2": 0.8352363109588623,
+        "logcosh": 0.042167551815509796,
+        "huber": 0.0443807877600193,
+        "msle": 0.03576633334159851
+      },
+      "serialization_time_secs": 0.0128,
+      "send_time_secs": 0.2085,
+      "total_send_time_secs": 0.2213,
+      "payload_size_bytes": 2216186,
+      "total_round_time_secs": 94.33
+    },
+    {
+      "round": 4,
+      "training_time_secs": 89.85,
+      "peak_ram_mb": 998.7,
+      "after_metrics": {
+        "mse": 0.10048064589500427,
+        "mae": 0.2271549552679062,
+        "r2": 0.8134828209877014,
+        "logcosh": 0.047002024948596954,
+        "huber": 0.050240322947502136,
+        "msle": 0.030955838039517403
+      },
+      "serialization_time_secs": 0.0119,
+      "send_time_secs": 0.2286,
+      "total_send_time_secs": 0.2405,
+      "payload_size_bytes": 2216187,
+      "total_round_time_secs": 97.38
+    },
+    {
+      "round": 5,
+      "training_time_secs": 146.2,
+      "peak_ram_mb": 1046.0,
+      "after_metrics": {
+        "mse": 0.09191948175430298,
+        "mae": 0.20660121738910675,
+        "r2": 0.8293744921684265,
+        "logcosh": 0.042760755866765976,
+        "huber": 0.04595945030450821,
+        "msle": 0.03168511390686035
+      },
+      "serialization_time_secs": 0.0116,
+      "send_time_secs": 0.2061,
+      "total_send_time_secs": 0.2177,
+      "payload_size_bytes": 2216186,
+      "total_round_time_secs": 151.55
+    },
+    {
+      "round": 6,
+      "training_time_secs": 88.51,
+      "peak_ram_mb": 1133.19,
+      "after_metrics": {
+        "mse": 0.08547864109277725,
+        "mae": 0.20056915283203125,
+        "r2": 0.8413302898406982,
+        "logcosh": 0.04000728949904442,
+        "huber": 0.042739324271678925,
+        "msle": 0.02845863439142704
+      },
+      "serialization_time_secs": 0.0118,
+      "send_time_secs": 0.8385,
+      "total_send_time_secs": 0.8503,
+      "payload_size_bytes": 2216187,
+      "total_round_time_secs": 94.61
+    },
+    {
+      "round": 7,
+      "training_time_secs": 91.14,
+      "peak_ram_mb": 1161.8,
+      "after_metrics": {
+        "mse": 0.07444161176681519,
+        "mae": 0.1855163276195526,
+        "r2": 0.8618177771568298,
+        "logcosh": 0.03504205867648125,
+        "huber": 0.037220802158117294,
+        "msle": 0.025725089013576508
+      },
+      "serialization_time_secs": 0.012,
+      "send_time_secs": 0.6789,
+      "total_send_time_secs": 0.6909,
+      "payload_size_bytes": 2216187,
+      "total_round_time_secs": 96.87
+    },
+    {
+      "round": 8,
+      "training_time_secs": 146.35,
+      "peak_ram_mb": 1179.88,
+      "after_metrics": {
+        "mse": 0.0762304812669754,
+        "mae": 0.18028046190738678,
+        "r2": 0.8584972023963928,
+        "logcosh": 0.03574414923787117,
+        "huber": 0.038115244358778,
+        "msle": 0.025828922167420387
+      },
+      "serialization_time_secs": 0.0119,
+      "send_time_secs": 0.2178,
+      "total_send_time_secs": 0.2297,
+      "payload_size_bytes": 2216185,
+      "total_round_time_secs": 152.81
+    },
+    {
+      "round": 9,
+      "training_time_secs": 91.76,
+      "peak_ram_mb": 1256.84,
+      "after_metrics": {
+        "mse": 0.04927343130111694,
+        "mae": 0.15202820301055908,
+        "r2": 0.9085361957550049,
+        "logcosh": 0.023528557270765305,
+        "huber": 0.024636713787913322,
+        "msle": 0.015560085885226727
+      },
+      "serialization_time_secs": 0.0121,
+      "send_time_secs": 0.1984,
+      "total_send_time_secs": 0.2105,
+      "payload_size_bytes": 2216191,
+      "total_round_time_secs": 99.1
+    },
+    {
+      "round": 10,
+      "training_time_secs": 86.49,
+      "peak_ram_mb": 1283.03,
+      "after_metrics": {
+        "mse": 0.09996820986270905,
+        "mae": 0.21005961298942566,
+        "r2": 0.8144340515136719,
+        "logcosh": 0.04617568850517273,
+        "huber": 0.04998393729329109,
+        "msle": 0.03528084605932236
+      },
+      "serialization_time_secs": 0.0119,
+      "send_time_secs": 0.3527,
+      "total_send_time_secs": 0.3646,
+      "payload_size_bytes": 2216187,
+      "total_round_time_secs": 89.81
+    }
+  ]
+}

@@ -3,24 +3,56 @@
     {
       "name": "CLOUD",
       "node_type": 1,
-      "ip_address": "cloud_main_app", 
+      "ip_address": "cloud_main_app",
       "port": 8081,
       "parent": null,
       "children": [8084]
     },
     {
-      "name": "FOG_NODE_1", 
+      "name": "FOG_NODE_1",
       "node_type": 2,
       "ip_address": "fog_main_app",
       "port": 8084,
       "parent": 8081,
-      "children": [8083]
+      "children": [8083, 8085, 8086, 8087, 8088]
     },
     {
-      "name": "EDGE_NODE_1",
+      "name": "edge_node_1",
       "node_type": 3,
-      "ip_address": "edge_main_app",
+      "ip_address": "exp1_edge_1",
       "port": 8083,
+      "parent": 8084,
+      "children": []
+    },
+    {
+      "name": "edge_node_2",
+      "node_type": 3,
+      "ip_address": "exp1_edge_2",
+      "port": 8085,
+      "parent": 8084,
+      "children": []
+    },
+    {
+      "name": "edge_node_3",
+      "node_type": 3,
+      "ip_address": "exp1_edge_3",
+      "port": 8086,
+      "parent": 8084,
+      "children": []
+    },
+    {
+      "name": "edge_node_4",
+      "node_type": 3,
+      "ip_address": "exp1_edge_4",
+      "port": 8087,
+      "parent": 8084,
+      "children": []
+    },
+    {
+      "name": "edge_node_5",
+      "node_type": 3,
+      "ip_address": "exp1_edge_5",
+      "port": 8088,
       "parent": 8084,
       "children": []
     }

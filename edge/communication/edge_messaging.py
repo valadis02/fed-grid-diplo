@@ -10,6 +10,7 @@ import pika
 import paho.mqtt.client as mqtt
 
 from shared.logging_config import logger
+from shared.crypto import encrypt_to_b64
 from edge.communication.edge_service import EdgeService
 from shared.node_state import FederatedNodeState
 
@@ -21,7 +22,7 @@ class EdgeMessaging:
                  fog_mqtt_port: int = int(os.getenv('FOG_MQTT_PORT', 1883)),
                  edge_service: EdgeService = None):
         """
-        :param fog_amqp_host: hostname or IP of the fog’s RabbitMQ broker.
+        :param fog_amqp_host: hostname or IP of the fog's RabbitMQ broker.
         :param fog_mqtt_host: hostname or IP of the fog's MQTT broker.
         :param fog_mqtt_port: port of the fog's MQTT broker.
         """
@@ -130,10 +131,8 @@ class EdgeMessaging:
         mqtt_client.reconnect_delay_set(min_delay=1, max_delay=30)
 
         def on_connect(client, userdata, flags, rc):
-            # flags may have 'session present' (paho v1) or 'session_present' (v2)
             sess = flags.get('session present', flags.get('session_present', 0))
             logger.info(f"Edge {edge_name}: MQTT connected rc={rc}, session_present={sess}")
-            # Always resubscribe on connect so we recover after broker restarts
             client.subscribe(topic, qos=1)
             logger.info(f"Edge {edge_name}: (re)subscribed to {topic}")
 
@@ -165,7 +164,6 @@ class EdgeMessaging:
         mqtt_client.on_disconnect = on_disconnect
         mqtt_client.on_message = on_mqtt_command
 
-        # Initial connect (sub happens in on_connect)
         for attempt in range(1, retries + 1):
             try:
                 mqtt_client.connect(self.fog_mqtt_host, self.fog_mqtt_port)
@@ -181,23 +179,37 @@ class EdgeMessaging:
         mqtt_client.loop_forever()
 
     def send_trained_model(self, model_path: str, metrics: dict) -> None:
-        """Send a trained model and its metrics back to the fog."""
-        # Read the model file and encode as base64
+        """Send an AES-256-GCM encrypted trained model and metrics to the fog.
+
+        Experiment 4: μετράμε χρόνο κρυπτογράφησης και μέγεθος payload.
+        Τα crypto_metrics αποθηκεύονται στο payload για εξαγωγή από logs.
+        """
+        edge_name = FederatedNodeState.get_current_node().name
+
+        # ── 1. Διαβάζουμε το μοντέλο ────────────────────────────────────────
         with open(model_path, "rb") as f:
             model_bytes = f.read()
-        model_b64 = base64.b64encode(model_bytes).decode('utf-8')
 
+        # ── 2. AES-256-GCM κρυπτογράφηση ────────────────────────────────────
+        model_b64_enc, enc_metrics = encrypt_to_b64(model_bytes)
+
+        # ── 3. Χτίζουμε payload ──────────────────────────────────────────────
         payload = {
-            "edge_mac": FederatedNodeState.get_current_node().device_mac,
-            "edge_name": FederatedNodeState.get_current_node().name,
-            "model": model_b64,
-            "metrics": metrics,
+            "edge_mac":       FederatedNodeState.get_current_node().device_mac,
+            "edge_name":      edge_name,
+            "model":          model_b64_enc,
+            "encrypted":      True,
+            "metrics":        metrics,
+            "crypto_metrics": enc_metrics,
+            # encrypt_time_s, plaintext_size_b, ciphertext_size_b, overhead_bytes
         }
 
+        # ── 4. Αποστολή μέσω RabbitMQ ────────────────────────────────────────
         connection = self._create_connection()
         channel = connection.channel()
         channel.queue_declare(queue='edge_to_fog_models', durable=True)
 
+        t_send_start = time.perf_counter()
         message_body = json.dumps(payload).encode('utf-8')
         channel.basic_publish(
             exchange='',
@@ -205,5 +217,15 @@ class EdgeMessaging:
             body=message_body,
             properties=pika.BasicProperties(delivery_mode=2)
         )
+        t_send_end = time.perf_counter()
         connection.close()
-        logger.info(f"Edge {FederatedNodeState.get_current_node().name}: sent trained model and metrics to fog.")
+
+        logger.info(
+            "Edge %s: sent encrypted model to fog | "
+            "encrypt=%.4fs | payload=%.1fKB | send=%.4fs",
+            edge_name,
+            enc_metrics['encrypt_time_s'],
+            enc_metrics['ciphertext_size_b'] / 1024,
+            t_send_end - t_send_start,
+        )
+        
