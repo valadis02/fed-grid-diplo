@@ -17,11 +17,17 @@ from cloud.model.model_aggregation_service import aggregate_received_models
 from cloud.model.cloud_evaluation_service import evaluate_global_model
 from cloud.communication.cloud_resources_paths import CloudResourcesPaths
 
-# ---------------------------------------------------------------------------
-# Minimal stand-in when the full topology stack isn't initialised (local test)
-# ---------------------------------------------------------------------------
+try:
+    from cloud.model.model_compression_service import compress_model
+    COMPRESSION_AVAILABLE = True
+except ImportError:
+    COMPRESSION_AVAILABLE = False
+    logger.warning("Cloud: model_compression_service not found — compression DISABLED.")
+
+QUANTIZATION_MODE = os.getenv("QUANTIZATION_MODE", "none").lower()
+
+
 class _SimpleNode:
-    """Fallback node used when FederatedNodeState has no current node."""
     def __init__(self, child_names):
         self.id = "CLOUD_NODE"
         self.child_nodes = [type("N", (), {"name": n})() for n in child_names]
@@ -73,7 +79,6 @@ class CloudMessaging:
                 os.fsync(tf.fileno())
                 tmp = tf.name
             os.replace(tmp, path)
-            logger.debug("Cloud: persisted round_id=%s", round_id)
         except Exception as e:
             logger.warning("Cloud: failed to persist round_id: %s", e)
 
@@ -95,7 +100,6 @@ class CloudMessaging:
     # ------------------------------------------------------------------
 
     def _create_connection(self, retries=10, delay=5) -> pika.BlockingConnection:
-        """Connect to the Cloud RabbitMQ broker (internal port 5672)."""
         for attempt in range(1, retries + 1):
             try:
                 return pika.BlockingConnection(pika.ConnectionParameters(
@@ -117,7 +121,6 @@ class CloudMessaging:
                 delay = min(delay * 2, 60)
 
     def _publish_to_fog_queues(self, channel, message_body: bytes):
-        """Publish directly to each per-fog durable queue."""
         node = _get_node()
         fogs = getattr(node, "child_nodes", []) or []
         if not fogs:
@@ -149,7 +152,6 @@ class CloudMessaging:
             except Exception as e:
                 logger.warning("Cloud MQTT connection failed (%d/%d): %s", attempt, retries, e)
                 if attempt == retries:
-                    logger.error("Cloud: could not connect to MQTT broker after %d retries.", retries)
                     return
                 time.sleep(delay)
         client.publish(topic, json.dumps(message), qos=qos, retain=retain)
@@ -172,14 +174,10 @@ class CloudMessaging:
         logger.info("Cloud (MQTT): sent command '1' → edges start training (round=%s).", round_id)
 
     # ------------------------------------------------------------------
-    # Model broadcast (AMQP) — called automatically after aggregation
+    # Model broadcast
     # ------------------------------------------------------------------
 
     def broadcast_cloud_model(self, data: Dict[str, any] = None):
-        """
-        Broadcast aggregated cloud model to all fogs via per-fog durable queues.
-        Also sends command '2' via MQTT so fogs/edges know a new round is starting.
-        """
         if data is None:
             data = {}
 
@@ -191,29 +189,47 @@ class CloudMessaging:
             logger.error("Cloud: no aggregated model at %s — cannot broadcast.", model_path)
             return
 
-        with open(model_path, "rb") as f:
-            model_b64 = base64.b64encode(f.read()).decode('utf-8')
+        model_format = "keras"
+        if COMPRESSION_AVAILABLE and QUANTIZATION_MODE != "none":
+            try:
+                logger.info("Cloud: applying compression (mode=%s)…", QUANTIZATION_MODE)
+                t_compress = time.perf_counter()
+                model_bytes, model_format = compress_model(model_path)
+                logger.info("Cloud: compression done | format=%s | size=%.1fKB | time=%.2fs",
+                            model_format, len(model_bytes) / 1024,
+                            round(time.perf_counter() - t_compress, 2))
+            except Exception as e:
+                logger.exception("Cloud: compression failed (%s) — sending uncompressed.", e)
+                with open(model_path, "rb") as f:
+                    model_bytes = f.read()
+                model_format = "keras"
+        else:
+            with open(model_path, "rb") as f:
+                model_bytes = f.read()
 
+        model_b64 = base64.b64encode(model_bytes).decode('utf-8')
         message = {
-            "command": "2",
-            "round_id": round_id,
-            "model": model_b64,
-            "data": data,
+            "command":      "2",
+            "round_id":     round_id,
+            "model":        model_b64,
+            "model_format": model_format,
+            "data":         data,
         }
         message_body = json.dumps(message).encode('utf-8')
 
         try:
             conn = self._create_connection()
-            ch = conn.channel()
+            ch   = conn.channel()
             self._publish_to_fog_queues(ch, message_body)
             conn.close()
-            logger.info("Cloud (AMQP): broadcast cloud model to fogs (round=%s).", round_id)
+            logger.info("Cloud (AMQP): broadcast cloud model | round=%s | size=%.1fKB",
+                        round_id, len(model_bytes) / 1024)
         except Exception as e:
             logger.exception("Cloud: AMQP broadcast failed: %s", e)
 
         mqtt_cmd = {"command": "2", "round_id": round_id, "cmd_id": int(time.time() * 1000)}
         self._mqtt_publish('cloud/fog/command', mqtt_cmd, qos=1, retain=False)
-        logger.info("Cloud (MQTT): sent command '2' → edges re-train with new model (round=%s).", round_id)
+        logger.info("Cloud (MQTT): sent command '2' → edges re-train (round=%s).", round_id)
 
     # ------------------------------------------------------------------
     # Aggregation gate
@@ -253,14 +269,10 @@ class CloudMessaging:
         return False
 
     # ------------------------------------------------------------------
-    # AMQP listener — receive fog models (AES-256-GCM decryption)
+    # AMQP listener
     # ------------------------------------------------------------------
 
     def start_amqp_listener(self):
-        """
-        Blocking loop: consume 'fog_to_cloud_models' queue.
-        Αποκρυπτογραφεί τα βάρη με AES-256-GCM (Experiment 4).
-        """
         os.makedirs(CloudResourcesPaths.MODELS_FOLDER_PATH.value, exist_ok=True)
 
         delay, max_delay = 5, 60
@@ -295,7 +307,6 @@ class CloudMessaging:
                     msg_id = getattr(properties, "message_id", None)
                     if msg_id:
                         if msg_id in recent_ids:
-                            logger.debug("Cloud: duplicate msg_id %s; skipping.", msg_id)
                             ch.basic_ack(delivery_tag=method.delivery_tag)
                             return
                         recent_ids[msg_id] = now
@@ -313,76 +324,105 @@ class CloudMessaging:
                     model_hash    = payload.get('hash')
                     recv_round_id = payload.get('round_id')
                     encrypted     = payload.get('encrypted', False)
+                    enc_mode      = payload.get('encryption_mode', 'aes')
 
                     if self.round_id is not None and recv_round_id is not None \
                             and recv_round_id != self.round_id:
-                        logger.warning(
-                            "Cloud: round-id mismatch (cloud=%s, fog=%s); ignoring.",
-                            self.round_id, recv_round_id)
+                        logger.warning("Cloud: round-id mismatch (cloud=%s, fog=%s); ignoring.",
+                                       self.round_id, recv_round_id)
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                         return
 
                     if self.round_id is None and recv_round_id is not None:
-                        logger.info("Cloud: adopting round_id=%s from Fog.", recv_round_id)
                         self._persist_round_id(recv_round_id)
 
                     if not fog_name or not model_b64:
-                        logger.warning("Cloud: malformed payload (missing fog_name or model).")
+                        logger.warning("Cloud: malformed payload.")
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                         return
 
-                    # Content-hash de-dupe (πάνω στο encrypted payload)
                     key = f"{fog_mac}:{fog_name}"
                     if not model_hash:
                         try:
                             model_hash = hashlib.sha256(base64.b64decode(model_b64)).hexdigest()
                         except Exception:
-                            logger.warning("Cloud: invalid base64 model from fog %s.", fog_name)
                             ch.basic_ack(delivery_tag=method.delivery_tag)
                             return
 
                     prev = self._recent_fog_models.get(key)
                     if prev and prev["hash"] == model_hash and (now - prev["ts"] < MSG_TTL):
-                        logger.debug("Cloud: duplicate content hash from %s; skipping.", fog_name)
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                         return
 
-                    # ── ΑΠΟΚΡΥΠΤΟΓΡΑΦΗΣΗ (Experiment 4) ──────────────────────────
+                    # ── Αποκρυπτογράφηση ───────────────────────────────────
+                    model_path = os.path.join(
+                        CloudResourcesPaths.MODELS_FOLDER_PATH.value,
+                        f'{fog_name}_aggregated_model.keras'
+                    )
+
                     try:
-                        if encrypted:
+                        if encrypted and enc_mode == "ckks":
+                            # ── CKKS: αποκρυπτογράφηση με secret key ──────
+                            import tensorflow as tf
+                            from shared.crypto_ckks import decrypt_weights_from_b64
+                            ctx_path = "/app/shared/ckks_keys/ckks_secret_context.bin"
+                            with open(ctx_path, "rb") as f:
+                                secret_ctx_bytes = f.read()
+
+                            weights, dec_metrics = decrypt_weights_from_b64(
+                                model_b64, secret_ctx_bytes
+                            )
+                            logger.info(
+                                "Cloud: CKKS decrypted model from fog %s | "
+                                "decrypt=%.2fs | params=%d",
+                                fog_name,
+                                dec_metrics["decrypt_time_s"],
+                                dec_metrics["total_params"],
+                            )
+
+                            # Ανακατασκεύασε .keras από weights
+                            template_path = "/app/shared/ckks_keys/model_template.keras"
+                            if not os.path.exists(template_path):
+                                raise FileNotFoundError(
+                                    f"CKKS: template model not found at {template_path}."
+                                )
+                            template_model = tf.keras.models.load_model(template_path)
+                            template_model.set_weights(weights)
+
+                            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                            template_model.save(model_path)
+
+                        elif encrypted and enc_mode == "aes":
+                            # ── AES: υπάρχουσα λογική αναλλοίωτη ──────────
                             model_bytes, dec_metrics = decrypt_from_b64(model_b64)
                             logger.info(
-                                "Cloud: decrypted model from fog %s | "
-                                "decrypt=%.4fs | size=%.1fKB",
-                                fog_name,
-                                dec_metrics['decrypt_time_s'],
-                                dec_metrics['plaintext_size_b'] / 1024,
-                            )
+                                "Cloud: AES decrypted model from fog %s | decrypt=%.4fs",
+                                fog_name, dec_metrics['decrypt_time_s'])
+                            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                            with open(model_path, 'wb') as f:
+                                f.write(model_bytes)
+                                f.flush()
+                                os.fsync(f.fileno())
+
                         else:
                             model_bytes = base64.b64decode(model_b64)
+                            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                            with open(model_path, 'wb') as f:
+                                f.write(model_bytes)
+
                     except Exception as e:
                         logger.error("Cloud: decryption failed for fog %s: %s", fog_name, e)
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                         return
-                    # ─────────────────────────────────────────────────────────────
 
                     try:
-                        model_path = os.path.join(
-                            CloudResourcesPaths.MODELS_FOLDER_PATH.value,
-                            f'{fog_name}_aggregated_model.keras'
-                        )
-                        with open(model_path, 'wb') as f:
-                            f.write(model_bytes)
-                            f.flush()
-                            os.fsync(f.fileno())
-
                         map_id = f"{fog_mac}_{fog_name}"
                         self.fog_models_cache[map_id] = {"model_path": model_path}
-                        self._recent_fog_models[key] = {"hash": model_hash, "ts": now}
+                        self._recent_fog_models[key]  = {"hash": model_hash, "ts": now}
                         logger.info("Cloud: cached model from fog '%s' (round=%s).",
                                     fog_name, recv_round_id)
                     except Exception as e:
-                        logger.error("Cloud: failed to save model from fog %s: %s", fog_name, e)
+                        logger.error("Cloud: failed to cache model from fog %s: %s", fog_name, e)
                         ch.basic_ack(delivery_tag=method.delivery_tag)
                         return
 
@@ -403,7 +443,7 @@ class CloudMessaging:
                 time.sleep(delay + random.uniform(0, 1.0))
                 delay = min(delay * 2, max_delay)
             except Exception:
-                logger.exception("Cloud: unexpected error in AMQP listener; retrying in %ss…", delay)
+                logger.exception("Cloud: unexpected error; retrying in %ss…", delay)
                 time.sleep(delay)
                 delay = min(delay * 2, max_delay)
             finally:
@@ -413,26 +453,17 @@ class CloudMessaging:
                 except Exception:
                     pass
 
-    # ------------------------------------------------------------------
-    # MQTT listener (stub)
-    # ------------------------------------------------------------------
-
     def start_mqtt_listener(self):
         logger.info("Cloud: MQTT listener started (no-op in current setup).")
         while True:
             time.sleep(60)
 
 
-# ---------------------------------------------------------------------------
-# Standalone entry-point
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
-
     logging_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     if logging_root not in sys.path:
         sys.path.insert(0, logging_root)
-
     cloud_msg = CloudMessaging()
-    logger.info("Cloud: Starting AMQP listener (standalone mode)…")
+    logger.info("Cloud: Starting AMQP listener…")
     cloud_msg.start_amqp_listener()

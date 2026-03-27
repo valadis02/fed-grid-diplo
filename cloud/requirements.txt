@@ -9,3 +9,9 @@ paho-mqtt
 pandas==2.2.2
 scikit-learn==1.5.2
 cryptography>=42.0.0
+tensorflow-model-optimization
+
+tf-keras
+
+numpy
+tenseal==0.3.15

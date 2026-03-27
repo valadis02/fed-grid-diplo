@@ -18,7 +18,7 @@ from fog.model.model_aggregation_service import aggregate_models_with_metrics
 from shared.utils import delete_files_containing
 
 # ---------------------------------------------------------------------------
-# Fallback helpers — used when FederatedNodeState has no node (local testing)
+# Fallback helpers
 # ---------------------------------------------------------------------------
 FOG_NAME_DEFAULT   = os.getenv("FOG_NAME",   "FOG_NODE_1")
 EDGE_NAMES_DEFAULT = os.getenv("EDGE_NAMES", "edge_node_1").split(",")
@@ -76,7 +76,6 @@ class FogMessaging:
     # -----------------------------------------------------------------------
 
     def _create_connection(self, retries=10, delay=5) -> pika.BlockingConnection:
-        """Connect to the FOG RabbitMQ broker."""
         for attempt in range(1, retries + 1):
             try:
                 return pika.BlockingConnection(
@@ -88,7 +87,6 @@ class FogMessaging:
                 time.sleep(delay)
 
     def _create_connection_to_cloud(self):
-        """Connect to the CLOUD RabbitMQ broker with infinite retry."""
         delay, max_delay = 5, 60
         while True:
             try:
@@ -126,7 +124,7 @@ class FogMessaging:
             pass
 
     # -----------------------------------------------------------------------
-    # MQTT listener  (Cloud → Fog → Edge relay via MQTT)
+    # MQTT listener
     # -----------------------------------------------------------------------
 
     def start_mqtt_listener(self):
@@ -187,8 +185,6 @@ class FogMessaging:
                 _purge_outbox_all()
 
             if command in ('1', '2'):
-                if not self._outbox_enabled:
-                    logger.info("Fog: enabling outbox worker (command=%s).", command)
                 self._outbox_enabled = True
 
             cmd_id = payload.get("cmd_id")
@@ -257,10 +253,6 @@ class FogMessaging:
                 try:
                     if not cloud_client.is_connected():
                         try:
-                            socket.getaddrinfo(cloud_host, cloud_port, 0, socket.SOCK_STREAM)
-                        except Exception as dns_e:
-                            logger.debug("Fog: CLOUD MQTT DNS not resolvable: %s", dns_e)
-                        try:
                             cloud_client.connect_async(cloud_host, cloud_port, keepalive=60)
                         except Exception as e:
                             logger.debug("Fog: watchdog nudge failed: %s", e)
@@ -279,13 +271,10 @@ class FogMessaging:
             time.sleep(60)
 
     # -----------------------------------------------------------------------
-    # AMQP listener  (Cloud → Fog bridge, forwards to Edge queues)
+    # AMQP listener (Cloud → Fog bridge)
     # -----------------------------------------------------------------------
 
     def start_amqp_listener(self):
-        """
-        Consume the cloud's per-fog durable queue and forward to each edge's queue.
-        """
         def run():
             fog_name = _fog_name()
             delay, max_delay = 5, 60
@@ -316,12 +305,7 @@ class FogMessaging:
                         auto_delete=False,
                         arguments=queue_args,
                     )
-                    logger.info(
-                        "Fog: declared queue '%s' → messages=%d, consumers=%d",
-                        declare_result.method.queue,
-                        getattr(declare_result.method, "message_count", -1),
-                        getattr(declare_result.method, "consumer_count", -1),
-                    )
+                    logger.info("Fog: declared queue '%s'", declare_result.method.queue)
                     cloud_ch.basic_qos(prefetch_count=1)
 
                     def on_amqp_model(ch, method, _props, body):
@@ -333,8 +317,6 @@ class FogMessaging:
                             return
 
                         if msg.get("command") == "2" or "model" in msg:
-                            if not self._outbox_enabled:
-                                logger.info("Fog: enabling outbox worker (cloud broadcast).")
                             self._outbox_enabled = True
 
                         if msg.get("model"):
@@ -351,13 +333,11 @@ class FogMessaging:
 
                         rid = msg.get("round_id")
                         if rid is not None and rid != self.current_round:
-                            logger.info("Fog: new round_id=%s (was %s) → purging outbox.", rid, self.current_round)
+                            logger.info("Fog: new round_id=%s → purging outbox.", rid)
                             self.current_round = rid
                             _purge_outbox_all()
 
                         edge_names = _edge_names()
-                        if not edge_names:
-                            logger.warning("Fog: no edge names available; cannot forward cloud model.")
                         try:
                             fog_params = pika.ConnectionParameters(
                                 host=self.fog_amqp_host,
@@ -379,8 +359,7 @@ class FogMessaging:
                                             content_type="application/json",
                                         ),
                                     )
-                                    logger.info("Fog (AMQP): forwarded cloud model to edge '%s' (queue: %s).",
-                                                edge_name, edge_q)
+                                    logger.info("Fog (AMQP): forwarded cloud model to edge '%s'.", edge_name)
                         except Exception as e:
                             logger.exception("Fog: failed forwarding to edges: %s", e)
 
@@ -390,7 +369,7 @@ class FogMessaging:
                     logger.info("Fog: consuming cloud messages from queue '%s'.", queue_name)
 
                     if announced_down:
-                        logger.info("Fog: cloud AMQP back online; bridge reconnected.")
+                        logger.info("Fog: cloud AMQP back online.")
                         announced_down = False
                         delay = 5
 
@@ -399,13 +378,8 @@ class FogMessaging:
                 except (socket.gaierror, pika.exceptions.AMQPError) as e:
                     now = time.time()
                     if not announced_down:
-                        logger.warning("Fog: cloud AMQP unavailable (%s). Retrying up to %ss...",
-                                       e.__class__.__name__, max_delay)
+                        logger.warning("Fog: cloud AMQP unavailable (%s).", e.__class__.__name__)
                         announced_down = True
-                        next_warn_at = now + 30
-                    elif now >= next_warn_at:
-                        logger.warning("Fog: still no cloud AMQP (%s). Next retry ~%ss.",
-                                       e.__class__.__name__, delay)
                         next_warn_at = now + 30
                     time.sleep(delay + random.uniform(0, 1.0))
                     delay = min(delay * 2, max_delay)
@@ -423,7 +397,7 @@ class FogMessaging:
         threading.Thread(target=run, daemon=True).start()
 
     # -----------------------------------------------------------------------
-    # Edge model listener  (Edge → Fog)
+    # Edge model listener (Edge → Fog)
     # -----------------------------------------------------------------------
 
     def start_edge_model_listener(self):
@@ -451,42 +425,76 @@ class FogMessaging:
                             metrics   = payload.get('metrics', {})
                             model_b64 = payload.get('model')
                             encrypted = payload.get('encrypted', False)
+                            enc_mode  = payload.get('encryption_mode', 'aes')
 
                             if not model_b64:
                                 logger.warning("Fog: edge model payload missing 'model' field.")
                                 ch.basic_ack(delivery_tag=method.delivery_tag)
                                 return
 
-                            # ── ΑΠΟΚΡΥΠΤΟΓΡΑΦΗΣΗ (Experiment 4) ─────────────────────
-                            if encrypted:
+                            if encrypted and enc_mode == "ckks":
+                                # ── CKKS: αποθήκευσε raw payload ΧΩΡΙΣ αποκρυπτογράφηση ──
+                                logger.info(
+                                    "Fog: received CKKS model from edge %s "
+                                    "(will aggregate in HE domain)",
+                                    edge_name,
+                                )
+                                model_path = os.path.join(
+                                    FogResourcesPaths.MODELS_FOLDER_PATH.value,
+                                    f"{edge_name}_model.ckks.bin",
+                                )
+                                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                                with open(model_path, "wb") as mf:
+                                    mf.write(base64.b64decode(model_b64))
+
+                                self.edge_models_cache[edge_name] = {
+                                    "model_path": model_path,
+                                    "metrics":    metrics,
+                                    "ckks":       True,
+                                }
+
+                            elif encrypted and enc_mode == "aes":
+                                # ── AES: υπάρχουσα λογική αναλλοίωτη ──
                                 model_bytes, dec_metrics = decrypt_from_b64(model_b64)
                                 logger.info(
-                                    "Fog: decrypted model from edge %s | "
-                                    "decrypt=%.4fs | size=%.1fKB",
-                                    edge_name,
-                                    dec_metrics['decrypt_time_s'],
-                                    dec_metrics['plaintext_size_b'] / 1024,
+                                    "Fog: decrypted AES model from edge %s | decrypt=%.4fs",
+                                    edge_name, dec_metrics['decrypt_time_s'],
                                 )
+                                model_path = os.path.join(
+                                    FogResourcesPaths.MODELS_FOLDER_PATH.value,
+                                    f"{edge_name}_model.keras",
+                                )
+                                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                                with open(model_path, "wb") as mf:
+                                    mf.write(model_bytes)
+
+                                self.edge_models_cache[edge_name] = {
+                                    "model_path": model_path,
+                                    "metrics":    metrics,
+                                    "ckks":       False,
+                                }
+
                             else:
+                                # Χωρίς κρυπτογράφηση
                                 model_bytes = base64.b64decode(model_b64)
-                            # ────────────────────────────────────────────────────────
+                                model_path = os.path.join(
+                                    FogResourcesPaths.MODELS_FOLDER_PATH.value,
+                                    f"{edge_name}_model.keras",
+                                )
+                                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                                with open(model_path, "wb") as mf:
+                                    mf.write(model_bytes)
 
-                            model_path = os.path.join(
-                                FogResourcesPaths.MODELS_FOLDER_PATH.value,
-                                f"{edge_name}_model.keras",
+                                self.edge_models_cache[edge_name] = {
+                                    "model_path": model_path,
+                                    "metrics":    metrics,
+                                    "ckks":       False,
+                                }
+
+                            logger.info(
+                                "Fog: cached model for edge %s | mode=%s | metrics=%s",
+                                edge_name, enc_mode, metrics,
                             )
-                            os.makedirs(os.path.dirname(model_path), exist_ok=True)
-                            with open(model_path, "wb") as mf:
-                                mf.write(model_bytes)
-
-                            self.edge_models_cache[edge_name] = {
-                                "model_path": model_path,
-                                "metrics":    metrics,
-                            }
-                            logger.info("Fog: cached model for edge %s with metrics %s", edge_name, metrics)
-
-                            if not self._outbox_enabled:
-                                logger.info("Fog: enabling outbox worker (received edge model).")
                             self._outbox_enabled = True
 
                         except Exception as e:
@@ -521,29 +529,119 @@ class FogMessaging:
         node = FederatedNodeState.get_current_node()
         num_expected = len(node.child_nodes) if node is not None else len(EDGE_NAMES_DEFAULT)
 
-        logger.info("Fog: Received %d/%d models. Waiting for more...",
-                    len(self.edge_models_cache), num_expected)
+        logger.info("Fog: Received %d/%d models.", len(self.edge_models_cache), num_expected)
 
-        if len(self.edge_models_cache) >= num_expected:
-            logger.info("Fog: All edge models received. Ready to aggregate!")
+        if len(self.edge_models_cache) < num_expected:
+            return False
+
+        logger.info("Fog: All edge models received. Ready to aggregate!")
+
+        # Έλεγξε αν όλα τα models είναι CKKS
+        all_ckks = all(v.get("ckks", False) for v in self.edge_models_cache.values())
+
+        if all_ckks:
+            # ── CKKS HE Aggregation (χωρίς αποκρυπτογράφηση) ──────────────
+            try:
+                from shared.crypto_ckks import he_aggregate
+
+                ctx_path = "/app/shared/ckks_keys/ckks_public_context_32768.bin"
+                with open(ctx_path, "rb") as f:
+                    pub_ctx_bytes = f.read()
+
+                payload_bytes_list = []
+                sample_counts = []
+                for entry in self.edge_models_cache.values():
+                    with open(entry["model_path"], "rb") as f:
+                        payload_bytes_list.append(f.read())
+                    mse = (entry["metrics"].get("after_training", {}).get("mse")
+                           or entry["metrics"].get("mse", 1.0))
+                    sample_counts.append(1.0 / (float(mse) + 1e-8))
+
+                logger.info("Fog: starting CKKS HE aggregation for %d clients...",
+                            len(payload_bytes_list))
+                agg_bytes, agg_metrics = he_aggregate(
+                    payload_bytes_list,
+                    pub_ctx_bytes,
+                    sample_counts=sample_counts,
+                )
+                logger.info(
+                    "Fog: CKKS HE aggregation done | time=%.2fs | size=%.1fKB",
+                    agg_metrics["aggregate_time_s"],
+                    agg_metrics["result_size_kb"],
+                )
+
+                agg_path = os.path.join(
+                    FogResourcesPaths.MODELS_FOLDER_PATH.value,
+                    "aggregated_fog_model.ckks.bin"
+                )
+                with open(agg_path, "wb") as f:
+                    f.write(agg_bytes)
+
+                self._send_ckks_model_to_cloud(agg_path, agg_bytes)
+
+            except Exception as e:
+                logger.exception("Fog: CKKS HE aggregation failed: %s", e)
+                self.edge_models_cache.clear()
+                return False
+
+        else:
+            # ── AES: υπάρχουσα λογική αναλλοίωτη ──────────────────────────
             try:
                 aggregated = aggregate_models_with_metrics(self.edge_models_cache)
             except Exception as e:
-                logger.exception("Fog: aggregation failed: %s", e)
+                logger.exception("Fog: AES aggregation failed: %s", e)
                 return False
 
             if aggregated is None:
-                logger.error("Fog: aggregation produced no model (skipping send to cloud).")
+                logger.error("Fog: aggregation produced no model.")
                 return False
 
-            logger.info("Fog has succeeded to aggregate edge models. Sending aggregated fog model to cloud.")
+            logger.info("Fog: aggregation succeeded. Sending to cloud.")
             self.send_aggregated_model_to_cloud()
-            self.edge_models_cache.clear()
-            return True
-        return False
+
+        self.edge_models_cache.clear()
+        return True
 
     # -----------------------------------------------------------------------
-    # Send aggregated model to Cloud
+    # CKKS: αποστολή στο cloud (χωρίς AES re-encryption)
+    # -----------------------------------------------------------------------
+
+    def _send_ckks_model_to_cloud(self, agg_path: str, agg_bytes: bytes):
+        fog_name   = _fog_name()
+        fog_mac    = "00:00:00:00:00:00"
+        model_hash = hashlib.sha256(agg_bytes).hexdigest()
+        model_b64  = base64.b64encode(agg_bytes).decode("utf-8")
+
+        body = json.dumps({
+            "fog_name":        fog_name,
+            "fog_device_mac":  fog_mac,
+            "model":           model_b64,
+            "encrypted":       True,
+            "encryption_mode": "ckks",
+            "hash":            model_hash,
+            "round_id":        self.current_round,
+        }).encode("utf-8")
+
+        try:
+            conn = self._create_connection_to_cloud()
+            ch   = conn.channel()
+            ch.queue_declare(queue="fog_to_cloud_models", durable=True)
+            ch.basic_publish(
+                exchange="",
+                routing_key="fog_to_cloud_models",
+                body=body,
+                properties=pika.BasicProperties(delivery_mode=2),
+            )
+            conn.close()
+            logger.info(
+                "Fog: sent CKKS aggregated model to cloud | size=%.1fKB",
+                len(agg_bytes) / 1024,
+            )
+        except Exception as e:
+            logger.exception("Fog: failed to send CKKS model to cloud: %s", e)
+
+    # -----------------------------------------------------------------------
+    # AES: αποστολή στο cloud (υπάρχουσα λογική)
     # -----------------------------------------------------------------------
 
     def send_aggregated_model_to_cloud(self):
@@ -555,7 +653,7 @@ class FogMessaging:
             os.remove(model_path)
         except Exception:
             pass
-        logger.info("Fog: queued aggregated fog model for cloud uplink (worker will publish).")
+        logger.info("Fog: queued aggregated fog model for cloud uplink.")
 
     def enqueue_model_for_cloud(self, model_path: str, precomputed_hash: str = None, model_bytes: bytes = None):
         fog_name = _fog_name()
@@ -581,7 +679,6 @@ class FogMessaging:
             mf.flush(); os.fsync(mf.fileno())
 
         if self.current_round is None:
-            logger.warning("Fog: current_round is None, forcing round_id='TEST_ROUND'.")
             self.current_round = "TEST_ROUND"
 
         meta = {
@@ -601,7 +698,7 @@ class FogMessaging:
         logger.info("Fog: queued model %s for later uplink.", model_hash)
 
     # -----------------------------------------------------------------------
-    # Cloud uplink worker  (Fog → Cloud AMQP, AES-256-GCM encrypted)
+    # Cloud uplink worker (AES — υπάρχουσα λογική αναλλοίωτη)
     # -----------------------------------------------------------------------
 
     def start_cloud_uplink_worker(self):
@@ -633,9 +730,7 @@ class FogMessaging:
                     ch.queue_declare(queue="fog_to_cloud_models", durable=True)
 
                     def _on_return(_ch, method, props, body):
-                        logger.warning("Fog: broker returned message (rk=%s, code=%s).",
-                                       getattr(method, "routing_key", "?"),
-                                       getattr(method, "reply_code", "?"))
+                        logger.warning("Fog: broker returned message.")
                     ch.add_on_return_callback(_on_return)
 
                     for fname in files:
@@ -677,24 +772,23 @@ class FogMessaging:
                         with open(blob_path, "rb") as mf:
                             model_bytes = mf.read()
 
-                        # ── ΚΡΥΠΤΟΓΡΑΦΗΣΗ πριν αποστολή στο cloud (Experiment 4) ──
+                        # AES encryption πριν αποστολή στο cloud
                         model_b64_enc, enc_metrics = encrypt_to_b64(model_bytes)
                         logger.info(
-                            "Fog: encrypted model for cloud | "
-                            "encrypt=%.4fs | size=%.1fKB",
+                            "Fog: AES encrypted model for cloud | encrypt=%.4fs | size=%.1fKB",
                             enc_metrics['encrypt_time_s'],
                             enc_metrics['ciphertext_size_b'] / 1024,
                         )
-                        # ──────────────────────────────────────────────────────────
 
                         body = json.dumps({
-                            "fog_name":       fog_name,
-                            "fog_device_mac": fog_mac,
-                            "model":          model_b64_enc,
-                            "encrypted":      True,
-                            "hash":           model_hash,
-                            "round_id":       round_id,
-                            "crypto_metrics": enc_metrics,
+                            "fog_name":        fog_name,
+                            "fog_device_mac":  fog_mac,
+                            "model":           model_b64_enc,
+                            "encrypted":       True,
+                            "encryption_mode": "aes",
+                            "hash":            model_hash,
+                            "round_id":        round_id,
+                            "crypto_metrics":  enc_metrics,
                         }).encode("utf-8")
 
                         props = pika.BasicProperties(
@@ -711,7 +805,7 @@ class FogMessaging:
                                 properties=props,
                                 mandatory=True,
                             )
-                            logger.info("Fog: publish confirmed (msg_id=%s, hash=%s).", msg_id, model_hash)
+                            logger.info("Fog: publish confirmed (msg_id=%s).", msg_id)
                             try: os.remove(meta_path)
                             except: pass
                             try: os.remove(blob_path)
@@ -727,13 +821,8 @@ class FogMessaging:
                         socket.gaierror, pika.exceptions.AMQPError) as e:
                     now = time.time()
                     if not announced_down:
-                        logger.warning("Fog: cloud uplink issue (%s). Backing off up to %ss...",
-                                       e.__class__.__name__, max_delay)
+                        logger.warning("Fog: cloud uplink issue (%s).", e.__class__.__name__)
                         announced_down = True
-                        next_warn_at = now + 30
-                    elif now >= next_warn_at:
-                        logger.warning("Fog: still no cloud uplink (%s). Next retry ~%ss.",
-                                       e.__class__.__name__, delay)
                         next_warn_at = now + 30
                     time.sleep(delay + random.uniform(0, 1.0))
                     delay = min(delay * 2, max_delay)
@@ -752,13 +841,11 @@ class FogMessaging:
 
 
 # ---------------------------------------------------------------------------
-# Standalone entry-point
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     messaging = FogMessaging()
     logger.info("Fog: Starting all messaging services...")
-
     messaging.start_edge_model_listener()
     messaging.start_amqp_listener()
     messaging.start_cloud_uplink_worker()
-    messaging.start_mqtt_listener()  # blocking
+    messaging.start_mqtt_listener()
+    

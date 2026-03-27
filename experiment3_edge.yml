@@ -35,7 +35,7 @@ services:
       - DEVICE_LABEL=${DEVICE_LABEL:-unknown_device}
     command: python3 -m edge.model.run_federated_cycle
     volumes:
-      - ./data/house_1:/app/edge/data
+      - ./data/house_5:/app/edge/data
       - ./edge/models:/app/edge/models
     networks:
       - aqtf_shared_network

@@ -21,11 +21,6 @@ class EdgeMessaging:
                  fog_mqtt_host: str = os.getenv('FOG_MQTT_HOST', 'mqtt-fog1'),
                  fog_mqtt_port: int = int(os.getenv('FOG_MQTT_PORT', 1883)),
                  edge_service: EdgeService = None):
-        """
-        :param fog_amqp_host: hostname or IP of the fog's RabbitMQ broker.
-        :param fog_mqtt_host: hostname or IP of the fog's MQTT broker.
-        :param fog_mqtt_port: port of the fog's MQTT broker.
-        """
         self.fog_amqp_host = fog_amqp_host
         self.fog_mqtt_host = fog_mqtt_host
         self.fog_mqtt_port = fog_mqtt_port
@@ -97,7 +92,7 @@ class EdgeMessaging:
                     if announced_down:
                         logger.info("Edge: AMQP reconnected.")
                         announced_down = False
-                    delay = 5  # reset
+                    delay = 5
                     ch.start_consuming()
 
                 except (socket.gaierror, pika.exceptions.AMQPError) as e:
@@ -179,32 +174,67 @@ class EdgeMessaging:
         mqtt_client.loop_forever()
 
     def send_trained_model(self, model_path: str, metrics: dict) -> None:
-        """Send an AES-256-GCM encrypted trained model and metrics to the fog.
-
-        Experiment 4: μετράμε χρόνο κρυπτογράφησης και μέγεθος payload.
-        Τα crypto_metrics αποθηκεύονται στο payload για εξαγωγή από logs.
-        """
+        """Send trained model to fog — AES-256-GCM or CKKS depending on ENCRYPTION_MODE."""
         edge_name = FederatedNodeState.get_current_node().name
+        ENCRYPTION_MODE = os.getenv("ENCRYPTION_MODE", "aes").lower()
 
-        # ── 1. Διαβάζουμε το μοντέλο ────────────────────────────────────────
+        # ── 1. Διάβασε το μοντέλο ──────────────────────────────────────────
         with open(model_path, "rb") as f:
             model_bytes = f.read()
 
-        # ── 2. AES-256-GCM κρυπτογράφηση ────────────────────────────────────
-        model_b64_enc, enc_metrics = encrypt_to_b64(model_bytes)
+        # ── 2. Κρυπτογράφηση ──────────────────────────────────────────────
+        if ENCRYPTION_MODE == "ckks":
+            import tensorflow as tf
+            from shared.crypto_ckks import encrypt_weights_to_b64
 
-        # ── 3. Χτίζουμε payload ──────────────────────────────────────────────
-        payload = {
-            "edge_mac":       FederatedNodeState.get_current_node().device_mac,
-            "edge_name":      edge_name,
-            "model":          model_b64_enc,
-            "encrypted":      True,
-            "metrics":        metrics,
-            "crypto_metrics": enc_metrics,
-            # encrypt_time_s, plaintext_size_b, ciphertext_size_b, overhead_bytes
-        }
+            # Φόρτωσε public context
+            ctx_path = "/app/shared/ckks_keys/ckks_public_context.bin"
+            with open(ctx_path, "rb") as f:
+                pub_ctx_bytes = f.read()
 
-        # ── 4. Αποστολή μέσω RabbitMQ ────────────────────────────────────────
+            # Εξαγωγή βαρών από το μοντέλο
+            model = tf.keras.models.load_model(model_path)
+            weights = model.get_weights()
+
+            model_b64_enc, enc_metrics = encrypt_weights_to_b64(weights, pub_ctx_bytes)
+
+            payload = {
+                "edge_mac":        FederatedNodeState.get_current_node().device_mac,
+                "edge_name":       edge_name,
+                "model":           model_b64_enc,
+                "encrypted":       True,
+                "encryption_mode": "ckks",
+                "metrics":         metrics,
+                "crypto_metrics":  enc_metrics,
+            }
+            logger.info(
+                "Edge %s: CKKS encrypted %d params | encrypt=%.2fs | payload=%.1fKB",
+                edge_name,
+                enc_metrics["total_params"],
+                enc_metrics["encrypt_time_s"],
+                enc_metrics["payload_size_kb"],
+            )
+
+        else:
+            # ── AES-256-GCM (υπάρχουσα λογική — αναλλοίωτη) ───────────────
+            model_b64_enc, enc_metrics = encrypt_to_b64(model_bytes)
+            payload = {
+                "edge_mac":        FederatedNodeState.get_current_node().device_mac,
+                "edge_name":       edge_name,
+                "model":           model_b64_enc,
+                "encrypted":       True,
+                "encryption_mode": "aes",
+                "metrics":         metrics,
+                "crypto_metrics":  enc_metrics,
+            }
+            logger.info(
+                "Edge %s: AES encrypted | encrypt=%.4fs | payload=%.1fKB",
+                edge_name,
+                enc_metrics['encrypt_time_s'],
+                enc_metrics['ciphertext_size_b'] / 1024,
+            )
+
+        # ── 3. Αποστολή μέσω RabbitMQ ─────────────────────────────────────
         connection = self._create_connection()
         channel = connection.channel()
         channel.queue_declare(queue='edge_to_fog_models', durable=True)
@@ -221,11 +251,9 @@ class EdgeMessaging:
         connection.close()
 
         logger.info(
-            "Edge %s: sent encrypted model to fog | "
-            "encrypt=%.4fs | payload=%.1fKB | send=%.4fs",
+            "Edge %s: sent model to fog | mode=%s | send=%.4fs",
             edge_name,
-            enc_metrics['encrypt_time_s'],
-            enc_metrics['ciphertext_size_b'] / 1024,
+            ENCRYPTION_MODE,
             t_send_end - t_send_start,
         )
         

@@ -28,7 +28,7 @@ from tensorflow.keras.preprocessing import timeseries_dataset_from_array
 HOUSES          = 5
 SEQUENCE_LENGTH = 144
 BATCH_SIZE      = 32
-EPOCHS          = 40
+EPOCHS          = 1
 DATA_DIR        = "data"
 OUTPUT_FILE     = "results_centralized_v2.json"
 
@@ -232,3 +232,5 @@ print("\n" + "=" * 60)
 print(" Centralized Training v2 Complete!")
 print(f" Results saved to {OUTPUT_FILE}")
 print("=" * 60)
+model.save("centralized_model.keras")
+print(" Model saved to centralized_model.keras")

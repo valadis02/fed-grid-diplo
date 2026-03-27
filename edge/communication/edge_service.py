@@ -17,7 +17,7 @@ class EdgeService:
 
     @staticmethod
     def create_local_edge_model():
-        edge_model = create_model('simple_lstm_two_gates')
+        edge_model = create_model(os.getenv('MODEL_ARCHITECTURE', 'base'))
 
         # ensure dir exists
         Path(EdgeResourcesPaths.MODELS_FOLDER_PATH.value).mkdir(parents=True, exist_ok=True)

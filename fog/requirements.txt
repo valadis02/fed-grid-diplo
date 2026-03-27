@@ -9,3 +9,6 @@ aio-pika==9.5.4
 psutil==7.0.0
 paho-mqtt
 cryptography>=42.0.0
+
+numpy
+tenseal==0.3.15
