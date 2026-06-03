@@ -10,6 +10,7 @@ run_federated_cycle.py
   [Πείραμα 3/4] Καταγράφει χρόνους και RAM ανά γύρο.
   [Πείραμα 4]   AES-256-GCM κρυπτογράφηση.
   [Πείραμα 8]   CKKS Homomorphic Encryption (poly_mod=16384).
+  [Byzantine]   ATTACK_TYPE=label_flipping|sign_flipping|gaussian_noise
 """
 import os
 import sys
@@ -54,12 +55,20 @@ else:
     logger.info("Edge: encryption DISABLED (ENCRYPTION_MODE=none).")
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Attack mode ───────────────────────────────────────────────────────────────
+ATTACK_TYPE = os.getenv('ATTACK_TYPE', 'none').lower()
+if ATTACK_TYPE != 'none':
+    logger.warning(f"Edge: BYZANTINE ATTACK ENABLED — type={ATTACK_TYPE.upper()}")
+else:
+    logger.info("Edge: no attack (ATTACK_TYPE=none).")
+# ─────────────────────────────────────────────────────────────────────────────
+
 # ── ρυθμίσεις ────────────────────────────────────────────────────────────────
 FOG_HOST     = os.getenv('FOG_RABBITMQ_HOST', 'localhost')
 FOG_PORT     = int(os.getenv('FOG_RABBITMQ_PORT', 5672))
 EDGE_NAME    = os.getenv('EDGE_NAME', 'edge_node_1')
 EDGE_MAC     = os.getenv('EDGE_MAC',  '00:00:00:00:00:00')
-TEST_DATE    = os.getenv('TRAINING_DATE', '2024-01-01')
+TEST_DATE    = os.getenv('TRAINING_DATE', '2012-02-01')
 MAX_ROUNDS   = int(os.getenv('MAX_ROUNDS', 3))
 WAIT_TIMEOUT = int(os.getenv('WAIT_TIMEOUT_SECS', 120))
 
@@ -95,7 +104,7 @@ def create_base_model():
             os.remove(old_model)
             logger.info(f"Removed old model: {old_model}")
 
-    model = create_model(os.getenv('MODEL_ARCHITECTURE', 'base'))
+    model = create_model(os.getenv('MODEL_ARCHITECTURE', 'simple_lstm_two_gates'))
     model.save(model_path)
     logger.info(f"Base model saved at {model_path}")
 
@@ -113,15 +122,82 @@ def _pika_connect(retries=10, delay=5):
             time.sleep(delay)
 
 
+# ── Byzantine attack ──────────────────────────────────────────────────────────
+def apply_attack(model_path: str) -> str:
+    """
+    Αλλοιώνει το εκπαιδευμένο μοντέλο πριν την αποστολή στο Fog.
+    Επιστρέφει το path του αλλοιωμένου μοντέλου (αντικαθιστά το original).
+
+    - label_flipping : αντιστρέφει τα weights του τελευταίου Dense(1) layer
+                       → σπρώχνει τις προβλέψεις στην αντίθετη κατεύθυνση
+    - sign_flipping  : πολλαπλασιάζει ΟΛΑ τα weights με -1
+    - gaussian_noise : προσθέτει τυχαίο θόρυβο μεγάλης διακύμανσης σε όλα τα weights
+    """
+    if ATTACK_TYPE == 'none':
+        return model_path
+
+    import tensorflow as tf
+
+    t_attack_start = time.perf_counter()
+    model = tf.keras.models.load_model(model_path, compile=False)
+    weights = model.get_weights()
+
+    if ATTACK_TYPE == 'label_flipping':
+        # Αντιστροφή μόνο του τελευταίου layer (Dense(1) kernel + bias)
+        # Τα weights[-2] = kernel, weights[-1] = bias του τελευταίου Dense
+        weights[-2] = -weights[-2]
+        weights[-1] = -weights[-1]
+        logger.warning(
+            f"Edge [{EDGE_NAME}]: LABEL FLIPPING applied — "
+            f"last layer weights negated."
+        )
+
+    elif ATTACK_TYPE == 'sign_flipping':
+        # Αντιστροφή ΟΛΩΝ των weights
+        weights = [-w for w in weights]
+        logger.warning(
+            f"Edge [{EDGE_NAME}]: SIGN FLIPPING applied — "
+            f"all weights negated."
+        )
+
+    elif ATTACK_TYPE == 'gaussian_noise':
+        # Προσθήκη μεγάλου τυχαίου θορύβου σε όλα τα weights
+        noise_scale = float(os.getenv('ATTACK_NOISE_SCALE', '10.0'))
+        weights = [w + np.random.normal(0, noise_scale, w.shape).astype(w.dtype)
+                   for w in weights]
+        logger.warning(
+            f"Edge [{EDGE_NAME}]: GAUSSIAN NOISE applied — "
+            f"scale={noise_scale}."
+        )
+
+    else:
+        logger.warning(f"Edge: Unknown attack type '{ATTACK_TYPE}' — no attack applied.")
+        return model_path
+
+    model.set_weights(weights)
+    model.save(model_path, include_optimizer=False)
+
+    attack_time = round(time.perf_counter() - t_attack_start, 4)
+    logger.warning(f"Edge [{EDGE_NAME}]: Attack applied in {attack_time}s.")
+    return model_path
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 def send_to_fog(metrics: dict) -> dict:
     """
     Στέλνει το εκπαιδευμένο μοντέλο στο Fog.
+    Αν ATTACK_TYPE != none, αλλοιώνει πρώτα το μοντέλο (Byzantine attack).
     Υποστηρίζει CKKS (poly_mod=16384), AES-256-GCM, ή χωρίς κρυπτογράφηση.
     """
     model_path = EdgeResourcesPaths.TRAINED_LOCAL_EDGE_MODEL_FILE_PATH.value
     if not os.path.exists(model_path):
         logger.error(f"Trained model not found at {model_path}")
         return {}
+
+    # ── Byzantine attack (πριν κρυπτογράφηση/αποστολή) ────────────────────
+    if ATTACK_TYPE != 'none':
+        model_path = apply_attack(model_path)
+    # ─────────────────────────────────────────────────────────────────────────
 
     encrypt_time_secs  = 0.0
     ctx_load_time_secs = 0.0
@@ -138,19 +214,15 @@ def send_to_fog(metrics: dict) -> dict:
             weights_path = model_path + ".weights.npz"
             tmp_output   = model_path + ".ckks.bin"
 
-            # Εξαγωγή weights σε .npz ΠΡΙΝ καθαρίσουμε το TF session
             model = tf.keras.models.load_model(model_path)
             weights = model.get_weights()
             np.savez(weights_path, *weights)
             del model, weights
             gc.collect()
 
-            # Καθάρισε TF μνήμη
             tf.keras.backend.clear_session()
             gc.collect()
 
-            # Τρέξε subprocess ΧΩΡΙΣ TF — μόνο numpy + tenseal
-            # Το subprocess διαβάζει το context από hardcoded path
             t_enc_start = time.perf_counter()
             result = subprocess.run(
                 [sys.executable, script_path, weights_path, tmp_output],
@@ -160,7 +232,6 @@ def send_to_fog(metrics: dict) -> dict:
             )
             encrypt_time_secs = round(time.perf_counter() - t_enc_start, 4)
 
-            # Καθάρισε weights file
             try:
                 os.remove(weights_path)
             except Exception:
@@ -171,12 +242,10 @@ def send_to_fog(metrics: dict) -> dict:
                     f"CKKS subprocess failed (rc={result.returncode}): {result.stderr}"
                 )
 
-            # Διάβασε metrics από stdout — πάρε μόνο την τελευταία γραμμή (JSON)
             stdout_lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
             enc_metrics = json.loads(stdout_lines[-1])
             ctx_load_time_secs = enc_metrics.get("ctx_load_time_s", 0.0)
 
-            # Διάβασε payload από temp file
             with open(tmp_output, "rb") as f:
                 payload_bytes_raw = f.read()
             model_b64 = base64.b64encode(payload_bytes_raw).decode("utf-8")
@@ -245,6 +314,7 @@ def send_to_fog(metrics: dict) -> dict:
         'metrics':         metrics,
         'encrypted':       encrypted,
         'encryption_mode': encryption_mode,
+        'attack_type':     ATTACK_TYPE,
     }
     payload_bytes = json.dumps(payload).encode('utf-8')
 
@@ -266,6 +336,7 @@ def send_to_fog(metrics: dict) -> dict:
 
     timing = {
         "encryption_mode":      encryption_mode,
+        "attack_type":          ATTACK_TYPE,
         "ctx_load_time_secs":   ctx_load_time_secs,
         "encrypt_time_secs":    encrypt_time_secs,
         "send_time_secs":       send_time_secs,
@@ -274,7 +345,7 @@ def send_to_fog(metrics: dict) -> dict:
         "encrypted":            encrypted,
     }
     logger.info(
-        f"Model sent to Fog | mode={encryption_mode} | "
+        f"Model sent to Fog | mode={encryption_mode} | attack={ATTACK_TYPE} | "
         f"ctx_load={ctx_load_time_secs}s | enc={encrypt_time_secs}s | "
         f"send={send_time_secs}s | payload={len(payload_bytes)/1024:.1f} KB | "
         f"encrypted={encrypted}"
@@ -341,6 +412,7 @@ def save_results(results: list):
             "timestamp":       datetime.now().isoformat(),
             "max_rounds":      MAX_ROUNDS,
             "encryption_mode": ENCRYPTION_MODE,
+            "attack_type":     ATTACK_TYPE,
             "aes_enabled":     AES_ENABLED,
             "ckks_enabled":    CKKS_ENABLED,
             "rounds":          results,
@@ -354,6 +426,7 @@ if __name__ == '__main__':
     logger.info(" FEDERATED LEARNING CYCLE STARTING")
     logger.info(f" Edge: {EDGE_NAME} | Rounds: {MAX_ROUNDS} | Date: {TEST_DATE}")
     logger.info(f" Encryption mode: {ENCRYPTION_MODE.upper()}")
+    logger.info(f" Attack type: {ATTACK_TYPE.upper()}")
     logger.info("=" * 60)
 
     try:
@@ -419,6 +492,7 @@ if __name__ == '__main__':
             f"train={round_result.get('training_time_secs')}s | "
             f"RAM={round_result.get('peak_ram_mb')}MB | "
             f"mode={round_result.get('encryption_mode', 'none')} | "
+            f"attack={ATTACK_TYPE} | "
             f"ctx_load={round_result.get('ctx_load_time_secs', 0.0)}s | "
             f"enc={round_result.get('encrypt_time_secs', 0.0)}s | "
             f"send={round_result.get('send_time_secs', 0.0)}s | "
@@ -433,3 +507,4 @@ if __name__ == '__main__':
     logger.info("\n" + "=" * 60)
     logger.info(" FEDERATED CYCLE COMPLETE")
     logger.info("=" * 60)
+    

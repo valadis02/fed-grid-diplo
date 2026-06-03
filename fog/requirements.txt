@@ -12,3 +12,4 @@ cryptography>=42.0.0
 
 numpy
 tenseal==0.3.15
+pandas

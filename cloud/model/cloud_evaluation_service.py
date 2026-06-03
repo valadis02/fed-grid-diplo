@@ -2,12 +2,13 @@
 cloud_evaluation_service.py
 ============================
 Αξιολογεί το global model μετά από κάθε FL aggregation round.
-Χρησιμοποιεί ένα κοινό test set από όλα τα σπίτια για σύγκριση
-με την κεντρικοποιημένη εκπαίδευση.
+Υποστηρίζει και LCL data (αρχεία απευθείας στο /app/data/) και
+συνθετικά data (house_1/input_data.csv δομή).
 """
 import os
 import json
 import time
+import glob
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -18,12 +19,14 @@ from cloud.communication.cloud_resources_paths import CloudResourcesPaths
 from shared.logging_config import logger
 
 # ── Configuration ─────────────────────────────────────────────
-SEQUENCE_LENGTH = 144
+SEQUENCE_LENGTH = int(os.getenv('SEQUENCE_LENGTH', 48))
 BATCH_SIZE      = 32
 WINDOWS         = [3, 6, 12, 24]
-# Ημέρες που χρησιμοποιούνται ως test set (τελευταίες 20 μέρες)
-TEST_DAYS_START = 70
-TEST_DAYS_END   = 90
+POINTS_PER_DAY  = int(os.getenv('POINTS_PER_DAY', 48))
+
+# Ημέρες test set — για LCL (29 μέρες): 20-29
+TEST_DAYS_START = int(os.getenv('TEST_DAYS_START', 20))
+TEST_DAYS_END   = int(os.getenv('TEST_DAYS_END',   29))
 
 FEATURE_COLS = [
     "value_diff",
@@ -41,7 +44,6 @@ RESULTS_FILE = os.path.join(
 
 
 def _preprocess(df: pd.DataFrame) -> pd.DataFrame:
-    """Ίδιο preprocessing με edge/model/data_preprocessing.py"""
     df = df.rename(columns={"timestamp": "datetime", "consumption_kwh": "value"})
     df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
     df = df.dropna(subset=["datetime", "value"])
@@ -69,26 +71,51 @@ def _preprocess(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _find_csv_files(base: str) -> list:
+    """
+    Βρίσκει CSV αρχεία. Υποστηρίζει:
+      - house_N/input_data.csv (συνθετικά)
+      - *.csv απευθείας στο base/ (LCL)
+    """
+    paths = []
+    for house_id in range(1, 11):
+        p = os.path.join(base, f"house_{house_id}", "input_data.csv")
+        if os.path.exists(p):
+            paths.append(p)
+
+    if not paths:
+        paths = sorted(glob.glob(os.path.join(base, "*.csv")))
+
+    return paths
+
+
 def _load_test_data() -> pd.DataFrame:
-    """
-    Φορτώνει το test set από όλα τα σπίτια.
-    Ψάχνει στο /app/data/ (Docker mount) ή στο ./data/ (local).
-    """
-    points_per_day = 144
-    start_idx = TEST_DAYS_START * points_per_day
-    end_idx   = TEST_DAYS_END   * points_per_day
+    start_idx = TEST_DAYS_START * POINTS_PER_DAY
+    end_idx   = TEST_DAYS_END   * POINTS_PER_DAY
 
     dfs = []
     for base in ["/app/data", "./data"]:
         if not os.path.isdir(base):
             continue
-        for house_id in range(1, 6):
-            path = os.path.join(base, f"house_{house_id}", "input_data.csv")
-            if not os.path.exists(path):
-                continue
-            df = pd.read_csv(path)
-            df = _preprocess(df)
-            dfs.append(df.iloc[start_idx:end_idx])
+
+        csv_files = _find_csv_files(base)
+        if not csv_files:
+            continue
+
+        logger.info("Cloud eval: found %d CSV files in %s", len(csv_files), base)
+
+        for path in csv_files:
+            try:
+                df = pd.read_csv(path)
+                if "value_diff" not in df.columns:
+                    df = _preprocess(df)
+                slice_df = df.iloc[start_idx:end_idx]
+                if len(slice_df) > SEQUENCE_LENGTH:
+                    dfs.append(slice_df)
+                else:
+                    logger.warning("Cloud eval: %s has only %d rows in test range, skipping.", path, len(slice_df))
+            except Exception as e:
+                logger.error("Cloud eval: failed to load %s: %s", path, e)
 
         if dfs:
             break
@@ -101,7 +128,6 @@ def _load_test_data() -> pd.DataFrame:
 
 
 def _evaluate(model, df: pd.DataFrame) -> dict:
-    """Αξιολογεί το μοντέλο στο test set."""
     df = df.dropna(subset=FEATURE_COLS + ["value"])
     if len(df) <= SEQUENCE_LENGTH:
         logger.warning("Cloud eval: not enough test rows (%d).", len(df))
@@ -138,10 +164,6 @@ def _evaluate(model, df: pd.DataFrame) -> dict:
 
 
 def evaluate_global_model(round_num: int):
-    """
-    Καλείται μετά από κάθε aggregation round.
-    Φορτώνει το cloud model, αξιολογεί στο test set και αποθηκεύει τα metrics.
-    """
     model_path = CloudResourcesPaths.CLOUD_MODEL_FILE_PATH.value
     if not os.path.exists(model_path):
         logger.warning("Cloud eval: model not found at %s.", model_path)
@@ -169,12 +191,10 @@ def evaluate_global_model(round_num: int):
         round_num, metrics["mse"], metrics["mae"], metrics["r2"]
     )
 
-    # Αποθήκευση — append στο JSON αρχείο
     _append_metrics(metrics)
 
 
 def _append_metrics(metrics: dict):
-    """Προσθέτει τα metrics στο αρχείο αποτελεσμάτων."""
     try:
         os.makedirs(os.path.dirname(RESULTS_FILE), exist_ok=True)
 

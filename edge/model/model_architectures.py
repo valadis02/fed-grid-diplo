@@ -3,82 +3,69 @@ from shared.utils import required_columns
 from shared.logging_config import logger
 
 # ---------------------------------------------------------------
-# Νικήτρια αρχιτεκτονική από το Πείραμα 7 (scaling experiment):
-# Conv1D(16,k=3) + LSTM(32,64) + Dense(32) — ~34K παράμετροι
-# Βέλτιστο trade-off ακρίβειας / client drift / παραμέτρων
-# για FL σε non-IID δεδομένα κατανάλωσης ενέργειας.
+# MLP Baseline αρχιτεκτονική:
+# Flatten -> Dense(150) -> Dropout(0.2) -> Dense(75) -> Dropout(0.2) -> Dense(1)
+# ~120K παράμετροι, κατάλληλο για scalability benchmarking.
 # ---------------------------------------------------------------
 
-# String labels που αντιστοιχούν σε αυτό το μοντέλο
 _KNOWN_LABELS = {
     'conv1d_lstm_small',
-    'simple_lstm_two_gates',  # backwards compatibility
-    'base',                   # default fallback
+    'simple_lstm_two_gates',
+    'base',
     'conv1d_lstm',
+    'mlp_baseline',
 }
-
 
 def _num_features() -> int:
     return len(required_columns) - 1
 
-
 def _compile(model: tf.keras.Model) -> tf.keras.Model:
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
         loss='mse',
         metrics=['mae', 'mse']
     )
     return model
 
-
-def create_model(model_label_or_seq_len=144,
+def create_model(model_label_or_seq_len=48,
                  mask_value: int = -1) -> tf.keras.Model:
     """
-    Επιστρέφει το compiled Conv1D-LSTM-Small μοντέλο.
-
+    Επιστρέφει το compiled MLP baseline μοντέλο.
     Δέχεται είτε:
-      - string label (π.χ. 'base', 'conv1d_lstm_small') → αγνοείται, χτίζει πάντα το ίδιο μοντέλο
-      - int sequence_length (π.χ. 144) → χρησιμοποιείται ως sequence length
-
-    ~34K παράμετροι: Conv1D(16,k=3) + LSTM(32,64) + Dense(32).
+      - string label → αγνοείται, χτίζει πάντα MLP baseline
+      - int sequence_length (π.χ. 48) → χρησιμοποιείται ως sequence length
+    ~120K παράμετροι: Flatten + Dense(150) + Dense(75) + Dense(1).
     """
-    # Αν περαστεί string label, χρησιμοποίησε default sequence_length=144
     if isinstance(model_label_or_seq_len, str):
         if model_label_or_seq_len not in _KNOWN_LABELS:
             logger.warning(
                 f"[model_architectures] Unknown label '{model_label_or_seq_len}' "
-                f"— using default conv1d_lstm_small with sequence_length=144"
+                f"— using mlp_baseline with sequence_length=48"
             )
-        sequence_length = 144
+        sequence_length = 48
     else:
         sequence_length = int(model_label_or_seq_len)
 
     inputs = tf.keras.layers.Input(
         shape=(sequence_length, _num_features()), dtype=tf.float32
     )
-    x = tf.keras.layers.Conv1D(
-        16, kernel_size=3, activation='relu', padding='same'
-    )(inputs)
-    x = tf.keras.layers.BatchNormalization()(x)
+    x = tf.keras.layers.Flatten()(inputs)
+    x = tf.keras.layers.Dense(150, activation='relu')(x)
     x = tf.keras.layers.Dropout(0.2)(x)
-    x = tf.keras.layers.Masking(mask_value=mask_value)(x)
-    x = tf.keras.layers.LSTM(32, activation='tanh', return_sequences=True)(x)
-    x = tf.keras.layers.LSTM(64, activation='tanh')(x)
-    x = tf.keras.layers.Dense(32, activation='relu')(x)
+    x = tf.keras.layers.Dense(75, activation='relu')(x)
     x = tf.keras.layers.Dropout(0.2)(x)
     outputs = tf.keras.layers.Dense(1)(x)
 
-    model = tf.keras.Model(inputs, outputs, name='conv1d_lstm_small')
+    model = tf.keras.Model(inputs, outputs, name='mlp_baseline')
     logger.info(
-        f"[conv1d_lstm_small] δημιουργήθηκε | "
+        f"[mlp_baseline] δημιουργήθηκε | "
         f"params: {model.count_params():,} | "
         f"input: ({sequence_length}, {_num_features()})"
     )
     return _compile(model)
 
-
 # Backwards compatibility
-def simple_lstm_model(sequence_length: int = 144,
+def simple_lstm_model(sequence_length: int = 48,
                       mask_value: int = -1) -> tf.keras.Model:
     """Alias για create_model() — διατηρείται για συμβατότητα."""
     return create_model(sequence_length, mask_value)

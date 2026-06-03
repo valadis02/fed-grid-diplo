@@ -18,10 +18,7 @@ from shared.logging_config import logger
 from shared.utils import required_columns
 
 # ── FedProx configuration ────────────────────────────────────────────────────
-# Διαβάζεται από env variable: FL_ALGORITHM=fedprox ή fedavg (default)
 FL_ALGORITHM = os.getenv('FL_ALGORITHM', 'fedavg').lower()
-# Proximal term μ (mu) — τυπικές τιμές: 0.01, 0.1, 1.0
-# Μεγαλύτερο μ = πιο κοντά στο global model, λιγότερο client drift
 FEDPROX_MU   = float(os.getenv('FEDPROX_MU', '0.1'))
 
 logger.info(f"FL Algorithm: {FL_ALGORITHM.upper()}"
@@ -58,47 +55,23 @@ def compute_metrics(y_true, y_pred):
 # FedProx custom loss
 # =========================
 def make_fedprox_loss(global_weights, mu):
-    """
-    Δημιουργεί custom loss που προσθέτει proximal term:
-        L_fedprox = L_task + (mu/2) * ||w - w_global||²
-
-    Αυτό αποτρέπει το client drift αναγκάζοντας τα τοπικά βάρη
-    να παραμένουν κοντά στο καθολικό μοντέλο.
-
-    Args:
-        global_weights: λίστα από numpy arrays (βάρη global model)
-        mu: proximal term coefficient (τυπικά 0.01 - 1.0)
-    """
-    # Μετατρέπουμε σε tensors μία φορά (εκτός του loop εκπαίδευσης)
     global_weights_tensors = [
         tf.constant(w, dtype=tf.float32) for w in global_weights
     ]
 
     @tf.function
     def fedprox_loss(y_true, y_pred):
-        # Βασικό loss (MSE — ίδιο με το υπάρχον σύστημα)
         task_loss = tf.reduce_mean(tf.square(y_true - y_pred))
         return task_loss
 
-    # Η proximal regularization γίνεται μέσω custom training step
-    # (επιστρέφουμε το loss function και τα global weights ξεχωριστά)
     return fedprox_loss, global_weights_tensors
 
 
 class FedProxModel(tf.keras.Model):
-    """
-    Wrapper γύρω από το υπάρχον Keras model που προσθέτει
-    proximal regularization στο train_step.
-
-    Ο proximal term υπολογίζεται ως:
-        prox = (mu/2) * Σ_l ||w_l - w_global_l||²
-    όπου l τρέχει σε όλα τα trainable layers.
-    """
     def __init__(self, base_model, global_weights, mu):
         super().__init__()
         self.base_model = base_model
         self.mu = mu
-        # Αποθηκεύουμε τα global weights ως non-trainable variables
         self.global_weights_vars = [
             tf.Variable(w.astype(np.float32), trainable=False, name=f"global_w_{i}")
             for i, w in enumerate(global_weights)
@@ -113,12 +86,10 @@ class FedProxModel(tf.keras.Model):
         with tf.GradientTape() as tape:
             y_pred = self(x, training=True)
 
-            # Task loss (MSE)
             task_loss = tf.reduce_mean(tf.square(
                 tf.cast(y, tf.float32) - tf.squeeze(y_pred)
             ))
 
-            # Proximal term: (mu/2) * ||w - w_global||²
             prox_term = tf.constant(0.0)
             trainable_weights = self.base_model.trainable_variables
             for w, w_global in zip(trainable_weights, self.global_weights_vars):
@@ -127,7 +98,6 @@ class FedProxModel(tf.keras.Model):
 
             total_loss = task_loss + prox_term
 
-        # Gradient update
         gradients = tape.gradient(total_loss, trainable_weights)
         self.optimizer.apply_gradients(zip(gradients, trainable_weights))
 
@@ -150,10 +120,6 @@ class FedProxModel(tf.keras.Model):
 # RAM Monitor
 # =========================
 class PeakRamMonitor:
-    """
-    Τρέχει σε background thread και καταγράφει το peak RAM (MB)
-    της τρέχουσας διεργασίας κατά τη διάρκεια του model.fit().
-    """
     def __init__(self, interval: float = 0.5):
         self._interval = interval
         self._peak_mb = 0.0
@@ -219,25 +185,29 @@ def data_generator(file_path, feature_columns, target_column, sequence_length):
 # =========================
 def train_local_edge_model(
     training_date: str,
-    sequence_length: int = 144,
-    batch_size: int = 32,
+    sequence_length: int = int(os.getenv('SEQUENCE_LENGTH', 48)),
+    batch_size: int = int(os.getenv('BATCH_SIZE', 32)),
 ):
+    # -------- Hyperparameters from env --------
+    train_days = int(os.getenv('TRAIN_DAYS', 2))
+    eval_days  = int(os.getenv('EVAL_DAYS', 2))
+
     # -------- Dates --------
     start_dt = pd.to_datetime(training_date, errors="coerce")
     if pd.isna(start_dt):
         raise ValueError(f"Invalid training_date: {training_date}")
 
-    training_day1 = start_dt.strftime("%Y-%m-%d")
-    training_day2 = (start_dt + pd.Timedelta(days=2)).strftime("%Y-%m-%d")
-    evaluation_day1 = (start_dt + pd.Timedelta(days=3)).strftime("%Y-%m-%d")
-    evaluation_day2 = (start_dt + pd.Timedelta(days=5)).strftime("%Y-%m-%d")
+    training_day1   = start_dt.strftime("%Y-%m-%d")
+    training_day2   = (start_dt + pd.Timedelta(days=train_days)).strftime("%Y-%m-%d")
+    evaluation_day1 = (start_dt + pd.Timedelta(days=train_days + 1)).strftime("%Y-%m-%d")
+    evaluation_day2 = (start_dt + pd.Timedelta(days=train_days + 1 + eval_days)).strftime("%Y-%m-%d")
 
     logger.info(
-        f"Training days {training_day1} → {training_day2}, "
-        f"Evaluation days {evaluation_day1} → {evaluation_day2}"
+        f"Training days {training_day1} → {training_day2} ({train_days} days), "
+        f"Evaluation days {evaluation_day1} → {evaluation_day2} ({eval_days} days)"
     )
 
-    training_data_path = EdgeResourcesPaths.TRAINING_DAYS_DATA_PATH.value
+    training_data_path   = EdgeResourcesPaths.TRAINING_DAYS_DATA_PATH.value
     evaluation_data_path = EdgeResourcesPaths.EVALUATION_DAYS_DATA_PATH.value
 
     # -------- Training data --------
@@ -322,7 +292,6 @@ def train_local_edge_model(
     # -------- Configure model (FedAvg ή FedProx) --------
     if FL_ALGORITHM == 'fedprox':
         logger.info(f"Using FedProx (mu={FEDPROX_MU}) — adding proximal regularization")
-        # Αποθηκεύουμε τα global weights ΠΡΙΝ την εκπαίδευση
         global_weights = [w.numpy() for w in base_model.trainable_variables]
         model = FedProxModel(base_model, global_weights, mu=FEDPROX_MU)
         model.compile(optimizer=tf.keras.optimizers.Adam(0.001))
@@ -355,7 +324,6 @@ def train_local_edge_model(
     logger.info(f"Training time: {training_time_secs}s | Peak RAM: {peak_ram_mb} MB")
 
     # -------- Metrics AFTER training --------
-    # Για FedProx χρησιμοποιούμε το base_model για predictions
     inference_model = base_model if FL_ALGORITHM == 'fedprox' else model
 
     logger.info("Computing metrics after training...")
@@ -372,7 +340,6 @@ def train_local_edge_model(
     logger.info(f"Metrics after training ({FL_ALGORITHM.upper()}): {after_metrics}")
 
     # -------- Save model --------
-    # Αποθηκεύουμε πάντα το base_model (τα βάρη έχουν ενημερωθεί)
     Path(EdgeResourcesPaths.MODELS_FOLDER_PATH.value).mkdir(parents=True, exist_ok=True)
     inference_model.save(
         EdgeResourcesPaths.TRAINED_LOCAL_EDGE_MODEL_FILE_PATH.value,

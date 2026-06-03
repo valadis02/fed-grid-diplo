@@ -5,14 +5,14 @@ centralized_training_v2.py
 
 Διορθώσεις από v1:
   1. Split ΠΡΩΤΑ, preprocess ΜΕΤΑ ξεχωριστά (αποφυγή data leakage από rolling features)
-  2. Ξεχωριστό test set (τελευταίες 20 μέρες) που δεν αγγίζει το training
+  2. Ξεχωριστό test set (τελευταίες 5 μέρες) που δεν αγγίζει το training
   3. Feedback κάθε epoch
   4. Αποθήκευση μετά από κάθε epoch
 
-Splits (από 90 μέρες):
-  - Train:      ημέρες 1-60  (60 μέρες)
-  - Validation: ημέρες 61-70 (10 μέρες) — για monitoring κατά το training
-  - Test:       ημέρες 71-90 (20 μέρες) — για τελική αξιολόγηση
+Splits (από 30 μέρες, 30min intervals → 48 points/day):
+  - Train:      ημέρες 1-20  (20 μέρες)
+  - Validation: ημέρες 21-25 (5 μέρες) — για monitoring κατά το training
+  - Test:       ημέρες 26-30 (5 μέρες) — για τελική αξιολόγηση
 """
 
 import os
@@ -25,17 +25,17 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from tensorflow.keras.preprocessing import timeseries_dataset_from_array
 
 # ── Configuration ─────────────────────────────────────────────
-HOUSES          = 5
-SEQUENCE_LENGTH = 144
+HOUSES          = 10
+SEQUENCE_LENGTH = 48
 BATCH_SIZE      = 32
 EPOCHS          = 1
-DATA_DIR        = "data"
+DATA_DIR        = "data2"
 OUTPUT_FILE     = "results_centralized_v2.json"
 
-POINTS_PER_DAY  = 144
-TRAIN_END       = 60 * POINTS_PER_DAY   # ημέρες 1-60
-VAL_END         = 70 * POINTS_PER_DAY   # ημέρες 61-70
-TEST_END        = 90 * POINTS_PER_DAY   # ημέρες 71-90
+POINTS_PER_DAY  = 48
+TRAIN_END       = 20 * POINTS_PER_DAY   # ημέρες 1-20
+VAL_END         = 25 * POINTS_PER_DAY   # ημέρες 21-25
+TEST_END        = 30 * POINTS_PER_DAY   # ημέρες 26-30
 
 WINDOWS = [3, 6, 12, 24]
 
@@ -118,7 +118,7 @@ def evaluate_model(model, ds, steps):
 print("=" * 60)
 print(" Centralized Training v2 — No Data Leakage")
 print(f" Houses: {HOUSES} | Epochs: {EPOCHS}")
-print(" Split: Train=60d | Val=10d | Test=20d")
+print(" Split: Train=20d | Val=5d | Test=5d")
 print("=" * 60)
 
 print("\n[1/4] Loading and splitting data (preprocess per split)...")
@@ -180,7 +180,7 @@ results = {
     "note": "No data leakage — split before preprocess",
     "houses": HOUSES,
     "epochs": EPOCHS,
-    "splits": {"train_days": 60, "val_days": 10, "test_days": 20},
+    "splits": {"train_days": 20, "val_days": 5, "test_days": 5},
     "epoch_metrics": epoch_metrics,
 }
 

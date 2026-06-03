@@ -50,6 +50,7 @@ class FogMessaging:
     def __init__(self,
                  fog_amqp_host:   str = os.getenv('FOG_RABBITMQ_HOST',  'rabbitmq-fog1'),
                  cloud_amqp_host: str = os.getenv('CLOUD_RABBITMQ_HOST', 'rabbitmq-cloud'),
+                 cloud_amqp_port: int = int(os.getenv('CLOUD_RABBITMQ_PORT', '5672')),
                  fog_mqtt_host:   str = os.getenv('FOG_MQTT_HOST',  'mqtt-fog1'),
                  fog_mqtt_port:   int = int(os.getenv('FOG_MQTT_PORT',  1883)),
                  cloud_mqtt_host: str = os.getenv('CLOUD_MQTT_HOST', 'mqtt-cloud'),
@@ -57,6 +58,7 @@ class FogMessaging:
 
         self.fog_amqp_host   = fog_amqp_host
         self.cloud_amqp_host = cloud_amqp_host
+        self.cloud_amqp_port = cloud_amqp_port
         self.fog_mqtt_host   = fog_mqtt_host
         self.fog_mqtt_port   = fog_mqtt_port
         self.cloud_mqtt_host = cloud_mqtt_host
@@ -67,6 +69,9 @@ class FogMessaging:
         self._outbox_enabled = os.getenv('FOG_RESUME_OUTBOX_ON_BOOT', 'false').lower() == 'true'
         self.current_round   = None
         self.OUTBOX_TTL_SECS = int(os.getenv('FOG_OUTBOX_TTL_SECS', '86400'))
+
+        # ── ΝΕΕΣ ΑΛΛΑΓΕΣ: timestamp πρώτου μοντέλου ──────────────────────────
+        self._round_start_time: float = None
 
         _purge_outbox_all()
         logger.info("Fog: purged outbox on boot (no active round).")
@@ -92,6 +97,7 @@ class FogMessaging:
             try:
                 return pika.BlockingConnection(pika.ConnectionParameters(
                     host=self.cloud_amqp_host,
+                    port=self.cloud_amqp_port,
                     heartbeat=30,
                     blocked_connection_timeout=60,
                     connection_attempts=1,
@@ -183,6 +189,8 @@ class FogMessaging:
                 logger.info("Fog: new round_id=%s (was %s) → purging outbox.", round_id, self.current_round)
                 self.current_round = round_id
                 _purge_outbox_all()
+                # ── ΝΕΕΣ ΑΛΛΑΓΕΣ: reset round timer σε νέο round ─────────────
+                self._round_start_time = None
 
             if command in ('1', '2'):
                 self._outbox_enabled = True
@@ -289,6 +297,7 @@ class FogMessaging:
                 try:
                     cloud_params = pika.ConnectionParameters(
                         host=self.cloud_amqp_host,
+                        port=self.cloud_amqp_port,
                         heartbeat=30,
                         blocked_connection_timeout=60,
                         connection_attempts=1,
@@ -336,6 +345,8 @@ class FogMessaging:
                             logger.info("Fog: new round_id=%s → purging outbox.", rid)
                             self.current_round = rid
                             _purge_outbox_all()
+                            # ── ΝΕΕΣ ΑΛΛΑΓΕΣ: reset round timer ──────────────
+                            self._round_start_time = None
 
                         edge_names = _edge_names()
                         try:
@@ -432,8 +443,15 @@ class FogMessaging:
                                 ch.basic_ack(delivery_tag=method.delivery_tag)
                                 return
 
+                            # ── ΝΕΕΣ ΑΛΛΑΓΕΣ: timestamp πρώτου μοντέλου ──────
+                            if len(self.edge_models_cache) == 0:
+                                self._round_start_time = time.perf_counter()
+                                logger.info(
+                                    "Fog: first edge model received from %s — round timer started.",
+                                    edge_name,
+                                )
+
                             if encrypted and enc_mode == "ckks":
-                                # ── CKKS: αποθήκευσε raw payload ΧΩΡΙΣ αποκρυπτογράφηση ──
                                 logger.info(
                                     "Fog: received CKKS model from edge %s "
                                     "(will aggregate in HE domain)",
@@ -454,7 +472,6 @@ class FogMessaging:
                                 }
 
                             elif encrypted and enc_mode == "aes":
-                                # ── AES: υπάρχουσα λογική αναλλοίωτη ──
                                 model_bytes, dec_metrics = decrypt_from_b64(model_b64)
                                 logger.info(
                                     "Fog: decrypted AES model from edge %s | decrypt=%.4fs",
@@ -475,7 +492,6 @@ class FogMessaging:
                                 }
 
                             else:
-                                # Χωρίς κρυπτογράφηση
                                 model_bytes = base64.b64decode(model_b64)
                                 model_path = os.path.join(
                                     FogResourcesPaths.MODELS_FOLDER_PATH.value,
@@ -536,14 +552,11 @@ class FogMessaging:
 
         logger.info("Fog: All edge models received. Ready to aggregate!")
 
-        # Έλεγξε αν όλα τα models είναι CKKS
         all_ckks = all(v.get("ckks", False) for v in self.edge_models_cache.values())
 
         if all_ckks:
-            # ── CKKS HE Aggregation (χωρίς αποκρυπτογράφηση) ──────────────
             try:
                 from shared.crypto_ckks import he_aggregate
-
                 ctx_path = "/app/shared/ckks_keys/ckks_public_context_32768.bin"
                 with open(ctx_path, "rb") as f:
                     pub_ctx_bytes = f.read()
@@ -585,9 +598,12 @@ class FogMessaging:
                 return False
 
         else:
-            # ── AES: υπάρχουσα λογική αναλλοίωτη ──────────────────────────
             try:
-                aggregated = aggregate_models_with_metrics(self.edge_models_cache)
+                # ── ΝΕΕΣ ΑΛΛΑΓΕΣ: πέρνα το round_start_time ─────────────────
+                aggregated = aggregate_models_with_metrics(
+                    self.edge_models_cache,
+                    round_start_time=self._round_start_time,
+                )
             except Exception as e:
                 logger.exception("Fog: AES aggregation failed: %s", e)
                 return False
@@ -599,12 +615,10 @@ class FogMessaging:
             logger.info("Fog: aggregation succeeded. Sending to cloud.")
             self.send_aggregated_model_to_cloud()
 
+        # ── ΝΕΕΣ ΑΛΛΑΓΕΣ: reset για το επόμενο round ─────────────────────────
+        self._round_start_time = None
         self.edge_models_cache.clear()
         return True
-
-    # -----------------------------------------------------------------------
-    # CKKS: αποστολή στο cloud (χωρίς AES re-encryption)
-    # -----------------------------------------------------------------------
 
     def _send_ckks_model_to_cloud(self, agg_path: str, agg_bytes: bytes):
         fog_name   = _fog_name()
@@ -639,10 +653,6 @@ class FogMessaging:
             )
         except Exception as e:
             logger.exception("Fog: failed to send CKKS model to cloud: %s", e)
-
-    # -----------------------------------------------------------------------
-    # AES: αποστολή στο cloud (υπάρχουσα λογική)
-    # -----------------------------------------------------------------------
 
     def send_aggregated_model_to_cloud(self):
         model_path = FogResourcesPaths.FOG_MODEL_FILE_PATH.value
@@ -696,10 +706,6 @@ class FogMessaging:
             jf.flush(); os.fsync(jf.fileno())
         os.replace(tmp_meta, meta_path)
         logger.info("Fog: queued model %s for later uplink.", model_hash)
-
-    # -----------------------------------------------------------------------
-    # Cloud uplink worker (AES — υπάρχουσα λογική αναλλοίωτη)
-    # -----------------------------------------------------------------------
 
     def start_cloud_uplink_worker(self):
         def run():
@@ -772,7 +778,6 @@ class FogMessaging:
                         with open(blob_path, "rb") as mf:
                             model_bytes = mf.read()
 
-                        # AES encryption πριν αποστολή στο cloud
                         model_b64_enc, enc_metrics = encrypt_to_b64(model_bytes)
                         logger.info(
                             "Fog: AES encrypted model for cloud | encrypt=%.4fs | size=%.1fKB",
@@ -848,4 +853,3 @@ if __name__ == "__main__":
     messaging.start_amqp_listener()
     messaging.start_cloud_uplink_worker()
     messaging.start_mqtt_listener()
-    
