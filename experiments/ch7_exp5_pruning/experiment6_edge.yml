@@ -1,0 +1,40 @@
+# =============================================================
+# Πείραμα 6: FL με Pruning — Edge Node 5 (RPi5)
+#
+# Εκτέλεση:
+#   PC_IP=192.168.1.84 QUANTIZATION_MODE=<mode> RUN_ID=<n> \
+#     docker compose -f experiment6_edge.yml up
+#
+# QUANTIZATION_MODE: none / pruned50 / pruned70 / pruned90
+# RUN_ID: 1-3
+# =============================================================
+
+networks:
+  aqtf_shared_network:
+    external: true
+
+services:
+
+  edge_node_5:
+    image: edge-node:latest
+    container_name: exp6_edge_5
+    environment:
+      - FOG_RABBITMQ_HOST=${PC_IP:-exp6_rabbitmq_fog}
+      - FOG_MQTT_HOST=${PC_IP:-exp6_mqtt_fog}
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_5
+      - MAX_ROUNDS=${MAX_ROUNDS:-10}
+      - WAIT_TIMEOUT_SECS=600
+      - QUANTIZATION_MODE=${QUANTIZATION_MODE:-none}
+      - RUN_ID=${RUN_ID:-1}
+      - DO_BENCHMARK=false
+      - DEVICE_LABEL=RPi5
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+    command: python3 -m edge.model.run_federated_cycle_exp6
+    volumes:
+      - ./data/house_5:/app/edge/data
+      - ./edge/models/node_5:/app/edge/models
+    networks:
+      - aqtf_shared_network
+    restart: on-failure

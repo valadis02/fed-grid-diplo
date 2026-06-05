@@ -1,0 +1,223 @@
+# =============================================================
+# Πείραμα 6: FL με Pruning
+# Τρέχει στον PC — cloud + fog + edge_1,2,3,4 (containers)
+#
+# Σειρά εκτέλεσης:
+#   PC  → docker-compose -f experiment6.yml up
+#   RPi → PC_IP=<ip> QUANTIZATION_MODE=<mode> RUN_ID=<n> docker compose -f experiment6_edge.yml up
+#
+# QUANTIZATION_MODE: none / pruned50 / pruned70 / pruned90
+# RUN_ID: 1-3 (επανάληψη)
+# =============================================================
+
+networks:
+  aqtf_shared_network:
+    external: true
+
+services:
+
+# =============================================================
+# CLOUD
+# =============================================================
+
+  cloud_app:
+    image: cloud_node_app:latest
+    container_name: exp6_cloud_app
+    environment:
+      - RABBITMQ_HOST=exp6_rabbitmq_cloud
+      - CLOUD_RABBITMQ_HOST=exp6_rabbitmq_cloud
+      - CLOUD_MQTT_HOST=exp6_mqtt_cloud
+      - CLOUD_MQTT_PORT=1883
+      - APP_HOST_PORT=8081
+      - FOG_NAMES=FOG_NODE_1
+      - NUM_FOG_NODES=1
+      - QUANTIZATION_MODE=${QUANTIZATION_MODE:-none}
+    ports:
+      - "8082:8081"
+    depends_on:
+      - exp6_rabbitmq_cloud
+      - exp6_mqtt_cloud
+    networks:
+      - aqtf_shared_network
+    command: python3 -m cloud.communication.cloud_messaging
+    volumes:
+      - ./cloud/models:/app/models
+      - ./cloud/status:/app/status
+      - ./data:/app/data:ro
+    restart: on-failure
+
+  exp6_rabbitmq_cloud:
+    image: rabbitmq:3-management
+    container_name: exp6_rabbitmq_cloud
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    networks:
+      - aqtf_shared_network
+
+  exp6_mqtt_cloud:
+    image: eclipse-mosquitto
+    container_name: exp6_mqtt_cloud
+    ports:
+      - "1884:1883"
+    networks:
+      - aqtf_shared_network
+    volumes:
+      - ./cloud/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+# =============================================================
+# FOG
+# =============================================================
+
+  fog_app:
+    image: fog_node_app:latest
+    container_name: exp6_fog_app
+    environment:
+      - RABBITMQ_HOST=exp6_rabbitmq_fog
+      - FOG_HOST=exp6_rabbitmq_fog
+      - FOG_RABBITMQ_HOST=exp6_rabbitmq_fog
+      - CLOUD_HOST=exp6_rabbitmq_cloud
+      - CLOUD_RABBITMQ_HOST=exp6_rabbitmq_cloud
+      - FOG_MQTT_HOST=exp6_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - CLOUD_MQTT_HOST=exp6_mqtt_cloud
+      - CLOUD_MQTT_PORT=1883
+      - FOG_NAME=FOG_NODE_1
+      - EDGE_NAMES=edge_node_1,edge_node_2,edge_node_3,edge_node_4,edge_node_5
+      - APP_HOST_PORT=8081
+    ports:
+      - "8084:8081"
+    depends_on:
+      - exp6_rabbitmq_fog
+      - exp6_mqtt_fog
+      - exp6_rabbitmq_cloud
+    networks:
+      - aqtf_shared_network
+    command: uvicorn fog.communication.app_factory:app --host 0.0.0.0 --port 8081
+    volumes:
+      - ./fog/models:/app/models
+      - ./fog/models/outbox:/app/models/outbox
+    restart: on-failure
+
+  exp6_rabbitmq_fog:
+    image: rabbitmq:3-management
+    container_name: exp6_rabbitmq_fog
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - aqtf_shared_network
+
+  exp6_mqtt_fog:
+    image: eclipse-mosquitto
+    container_name: exp6_mqtt_fog
+    ports:
+      - "1883:1883"
+    networks:
+      - aqtf_shared_network
+    volumes:
+      - ./cloud/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+# =============================================================
+# EDGE 1-4 (containers στον PC, χωρίς resource limits)
+# =============================================================
+
+  edge_node_1:
+    image: edge-node:latest
+    container_name: exp6_edge_1
+    environment:
+      - FOG_RABBITMQ_HOST=exp6_rabbitmq_fog
+      - FOG_MQTT_HOST=exp6_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_1
+      - MAX_ROUNDS=${MAX_ROUNDS:-10}
+      - WAIT_TIMEOUT_SECS=600
+      - QUANTIZATION_MODE=${QUANTIZATION_MODE:-none}
+      - RUN_ID=${RUN_ID:-1}
+      - DO_BENCHMARK=false
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+    command: python3 -m edge.model.run_federated_cycle_exp6
+    volumes:
+      - ./data/house_1:/app/edge/data
+      - ./edge/models/node_1:/app/edge/models
+    networks:
+      - aqtf_shared_network
+    depends_on:
+      - exp6_rabbitmq_fog
+    restart: on-failure
+
+  edge_node_2:
+    image: edge-node:latest
+    container_name: exp6_edge_2
+    environment:
+      - FOG_RABBITMQ_HOST=exp6_rabbitmq_fog
+      - FOG_MQTT_HOST=exp6_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_2
+      - MAX_ROUNDS=${MAX_ROUNDS:-10}
+      - WAIT_TIMEOUT_SECS=600
+      - QUANTIZATION_MODE=${QUANTIZATION_MODE:-none}
+      - RUN_ID=${RUN_ID:-1}
+      - DO_BENCHMARK=false
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+    command: python3 -m edge.model.run_federated_cycle_exp6
+    volumes:
+      - ./data/house_2:/app/edge/data
+      - ./edge/models/node_2:/app/edge/models
+    networks:
+      - aqtf_shared_network
+    depends_on:
+      - exp6_rabbitmq_fog
+    restart: on-failure
+
+  edge_node_3:
+    image: edge-node:latest
+    container_name: exp6_edge_3
+    environment:
+      - FOG_RABBITMQ_HOST=exp6_rabbitmq_fog
+      - FOG_MQTT_HOST=exp6_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_3
+      - MAX_ROUNDS=${MAX_ROUNDS:-10}
+      - WAIT_TIMEOUT_SECS=600
+      - QUANTIZATION_MODE=${QUANTIZATION_MODE:-none}
+      - RUN_ID=${RUN_ID:-1}
+      - DO_BENCHMARK=false
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+    command: python3 -m edge.model.run_federated_cycle_exp6
+    volumes:
+      - ./data/house_3:/app/edge/data
+      - ./edge/models/node_3:/app/edge/models
+    networks:
+      - aqtf_shared_network
+    depends_on:
+      - exp6_rabbitmq_fog
+    restart: on-failure
+
+  edge_node_4:
+    image: edge-node:latest
+    container_name: exp6_edge_4
+    environment:
+      - FOG_RABBITMQ_HOST=exp6_rabbitmq_fog
+      - FOG_MQTT_HOST=exp6_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_4
+      - MAX_ROUNDS=${MAX_ROUNDS:-10}
+      - WAIT_TIMEOUT_SECS=600
+      - QUANTIZATION_MODE=${QUANTIZATION_MODE:-none}
+      - RUN_ID=${RUN_ID:-1}
+      - DO_BENCHMARK=false
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+    command: python3 -m edge.model.run_federated_cycle_exp6
+    volumes:
+      - ./data/house_4:/app/edge/data
+      - ./edge/models/node_4:/app/edge/models
+    networks:
+      - aqtf_shared_network
+    depends_on:
+      - exp6_rabbitmq_fog
+    restart: on-failure
