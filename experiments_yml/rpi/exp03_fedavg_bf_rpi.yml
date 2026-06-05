@@ -1,0 +1,38 @@
+# =============================================================
+# Experiment 03: fedavg_bf
+# Attack: bit_flipping | Aggregation: fedavg
+# RPi side: fog_app only
+# PC IP: 192.168.1.12
+# =============================================================
+
+networks:
+  aqtf_shared_network:
+    external: true
+
+services:
+
+  fog_app:
+    image: fog_node_app:arm64
+    container_name: fedavg_bf_fog_app
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.12
+      - CLOUD_RABBITMQ_HOST=192.168.1.12
+      - CLOUD_RABBITMQ_PORT=5673
+      - FOG_MQTT_HOST=192.168.1.12
+      - FOG_MQTT_PORT=1883
+      - CLOUD_MQTT_HOST=192.168.1.12
+      - CLOUD_MQTT_PORT=1884
+      - FOG_NAME=FOG_NODE_1
+      - EDGE_NAMES=edge_node_1,edge_node_2,edge_node_3,edge_node_4,edge_node_5,edge_node_6,edge_node_7,edge_node_8,edge_node_9,edge_node_10,attacker_node_1,attacker_node_2
+      - ENCRYPTION_MODE=none
+      - AGGREGATION_STRATEGY=fedavg
+      - KRUM_NUM_BYZANTINE=0
+    ports:
+      - "8084:8081"
+    networks:
+      - aqtf_shared_network
+    command: uvicorn fog.communication.app_factory:app --host 0.0.0.0 --port 8081
+    volumes:
+      - ./fog/models:/app/models
+      - ./fog/models/outbox:/app/models/outbox
+    restart: on-failure

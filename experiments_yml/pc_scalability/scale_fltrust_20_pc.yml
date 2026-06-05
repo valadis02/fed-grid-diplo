@@ -1,0 +1,651 @@
+# PC Edges YML: fltrust | 20 nodes
+networks:
+  aqtf_shared_network:
+    external: true
+
+services:
+
+  cloud_app:
+    image: cloud_node_app:latest
+    container_name: scale_fltrust_20_cloud_app
+    environment:
+      - RABBITMQ_HOST=scale_fltrust_20_rabbitmq_cloud
+      - CLOUD_RABBITMQ_HOST=scale_fltrust_20_rabbitmq_cloud
+      - CLOUD_MQTT_HOST=scale_fltrust_20_mqtt_cloud
+      - CLOUD_MQTT_PORT=1883
+      - APP_HOST_PORT=8081
+      - FOG_NAMES=FOG_NODE_1
+      - NUM_FOG_NODES=1
+    ports:
+      - "8082:8081"
+    depends_on:
+      - scale_fltrust_20_rabbitmq_cloud
+      - scale_fltrust_20_mqtt_cloud
+    networks:
+      - aqtf_shared_network
+    command: python3 -m cloud.communication.cloud_messaging
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/cloud/models:/app/models
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/cloud/status:/app/status
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data:/app/data:ro
+    restart: on-failure
+
+  scale_fltrust_20_rabbitmq_cloud:
+    image: rabbitmq:3-management
+    container_name: scale_fltrust_20_rabbitmq_cloud
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    networks:
+      - aqtf_shared_network
+
+  scale_fltrust_20_mqtt_cloud:
+    image: eclipse-mosquitto
+    container_name: scale_fltrust_20_mqtt_cloud
+    ports:
+      - "1884:1883"
+    networks:
+      - aqtf_shared_network
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/cloud/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  edge_node_1:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_1
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_1
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_1:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_1:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_2:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_2
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_2
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_2:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_2:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_3:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_3
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_3
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_3:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_3:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_4:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_4
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_4
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_4:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_4:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_5:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_5
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_5
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_5:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_5:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_6:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_6
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_6
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_6:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_6:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_7:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_7
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_7
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_7:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_7:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_8:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_8
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_8
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_8:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_8:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_9:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_9
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_9
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_9:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_9:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_10:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_10
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_10
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_10:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_10:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_11:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_11
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_11
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_1:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_11:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_12:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_12
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_12
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_2:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_12:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_13:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_13
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_13
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_3:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_13:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_14:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_14
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_14
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_4:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_14:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_15:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_15
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_15
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_5:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_15:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_16:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_16
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_16
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_6:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_16:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_17:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_17
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_17
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_7:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_17:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_18:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_18
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_18
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_8:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_18:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_19:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_19
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_19
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_9:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_19:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+
+  edge_node_20:
+    image: edge-node:latest
+    container_name: scale_fltrust_20_edge_20
+    environment:
+      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_PORT=5672
+      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_PORT=1883
+      - EDGE_NAME=edge_node_20
+      - MAX_ROUNDS=7
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - TRAINING_DATE=2012-02-01
+      - EPOCHS=5
+      - ATTACK_TYPE=none
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/lcl_data/house_10:/app/edge/data
+      - C:/Users/balt5/fed_grid_diplo/fed-grid-diplo/edge/models/node_20:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2g
+    restart: on-failure
+

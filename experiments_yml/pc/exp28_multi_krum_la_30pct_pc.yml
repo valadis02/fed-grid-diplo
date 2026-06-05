@@ -1,0 +1,431 @@
+# =============================================================
+# Algorithm : MULTI_KRUM
+# Attack    : label_flipping | 3/10 attackers (houses [8, 9, 10])
+# Attacker% : 30%
+# Generated : auto
+# =============================================================
+
+networks:
+  aqtf_shared_network:
+    external: true
+
+services:
+
+  # -- Cloud ----------------------------------------------------------
+
+  cloud_app:
+    image: cloud_node_app:latest
+    container_name: exp28_cloud_app
+    environment:
+      - RABBITMQ_HOST=exp28_rabbitmq_cloud
+      - CLOUD_RABBITMQ_HOST=exp28_rabbitmq_cloud
+      - CLOUD_MQTT_HOST=exp28_mqtt_cloud
+      - CLOUD_MQTT_PORT=1883
+      - APP_HOST_PORT=8081
+      - FOG_NAMES=FOG_NODE_1
+      - NUM_FOG_NODES=1
+    ports:
+      - "8082:8081"
+    depends_on:
+      exp28_rabbitmq_cloud:
+        condition: service_healthy
+      exp28_mqtt_cloud:
+        condition: service_started
+    networks:
+      - aqtf_shared_network
+    command: python3 -m cloud.communication.cloud_messaging
+    volumes:
+      - ./cloud/models:/app/models
+      - ./cloud/status:/app/status
+      - ./data:/app/data:ro
+    restart: on-failure
+
+  exp28_rabbitmq_cloud:
+    image: rabbitmq:3-management
+    container_name: exp28_rabbitmq_cloud
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    networks:
+      - aqtf_shared_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  exp28_mqtt_cloud:
+    image: eclipse-mosquitto
+    container_name: exp28_mqtt_cloud
+    ports:
+      - "1884:1883"
+    networks:
+      - aqtf_shared_network
+    volumes:
+      - ./cloud/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  # -- Fog ------------------------------------------------------------
+
+  fog_app:
+    image: fog_node_app:latest
+    container_name: exp28_fog_app
+    environment:
+      - RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - CLOUD_RABBITMQ_HOST=exp28_rabbitmq_cloud
+      - CLOUD_MQTT_HOST=exp28_mqtt_cloud
+      - CLOUD_MQTT_PORT=1883
+      - AGGREGATION_STRATEGY=multi_krum
+      - KRUM_NUM_BYZANTINE=3
+      - MULTI_KRUM_M=0
+      - TMEAN_TRIM_FRACTION=0.0
+      - FLTRUST_SERVER_NODE=edge_node_1
+      - FLTRUST_TS_THRESHOLD=0.05
+      - NUM_FOG_NODES=1
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+      exp28_rabbitmq_cloud:
+        condition: service_healthy
+      exp28_mqtt_fog:
+        condition: service_started
+    networks:
+      - aqtf_shared_network
+    command: python3 -m fog.communication.fog_messaging
+    volumes:
+      - ./fog/models:/app/models
+      - ./data/house_1:/app/root_data:ro
+    restart: on-failure
+
+  exp28_rabbitmq_fog:
+    image: rabbitmq:3-management
+    container_name: exp28_rabbitmq_fog
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - aqtf_shared_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  exp28_mqtt_fog:
+    image: eclipse-mosquitto
+    container_name: exp28_mqtt_fog
+    ports:
+      - "1883:1883"
+    networks:
+      - aqtf_shared_network
+    volumes:
+      - ./fog/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  # -- Edge Nodes -----------------------------------------------------
+
+  edge_node_1:
+    image: edge-node:latest
+    container_name: exp28_edge_node_1
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_1
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_1:/app/edge/data
+      - ./edge/models/node_1:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  edge_node_2:
+    image: edge-node:latest
+    container_name: exp28_edge_node_2
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_2
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_2:/app/edge/data
+      - ./edge/models/node_2:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  edge_node_3:
+    image: edge-node:latest
+    container_name: exp28_edge_node_3
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_3
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_3:/app/edge/data
+      - ./edge/models/node_3:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  edge_node_4:
+    image: edge-node:latest
+    container_name: exp28_edge_node_4
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_4
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_4:/app/edge/data
+      - ./edge/models/node_4:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  edge_node_5:
+    image: edge-node:latest
+    container_name: exp28_edge_node_5
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_5
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_5:/app/edge/data
+      - ./edge/models/node_5:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  edge_node_6:
+    image: edge-node:latest
+    container_name: exp28_edge_node_6
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_6
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_6:/app/edge/data
+      - ./edge/models/node_6:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  edge_node_7:
+    image: edge-node:latest
+    container_name: exp28_edge_node_7
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_7
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_7:/app/edge/data
+      - ./edge/models/node_7:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  attacker_8:
+    image: edge-node:latest
+    container_name: exp28_edge_node_8
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_8
+      - ATTACK_TYPE=label_flipping
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_8:/app/edge/data
+      - ./edge/models/node_8:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  attacker_9:
+    image: edge-node:latest
+    container_name: exp28_edge_node_9
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_9
+      - ATTACK_TYPE=label_flipping
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_9:/app/edge/data
+      - ./edge/models/node_9:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure
+
+  attacker_10:
+    image: edge-node:latest
+    container_name: exp28_edge_node_10
+    environment:
+      - FOG_RABBITMQ_HOST=exp28_rabbitmq_fog
+      - FOG_MQTT_HOST=exp28_mqtt_fog
+      - FOG_MQTT_PORT=1883
+      - MAX_ROUNDS=15
+      - WAIT_TIMEOUT_SECS=300
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - TF_ENABLE_ONEDNN_OPTS=0
+      - TRAIN_DAYS=20
+      - EVAL_DAYS=9
+      - EPOCHS=5
+      - EDGE_NAME=edge_node_10
+      - ATTACK_TYPE=label_flipping
+    depends_on:
+      exp28_rabbitmq_fog:
+        condition: service_healthy
+    networks: [aqtf_shared_network]
+    command: python3 -m edge.model.run_federated_cycle
+    volumes:
+      - ./data/house_10:/app/edge/data
+      - ./edge/models/node_10:/app/edge/models
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 3g
+    restart: on-failure

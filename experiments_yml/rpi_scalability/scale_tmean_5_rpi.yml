@@ -1,0 +1,47 @@
+# =============================================================
+# Scalability Benchmark - RPi Full Fog
+# Algorithm: tmean | Nodes: 5
+# PC IP: 192.168.1.8
+# =============================================================
+services:
+  rabbitmq_fog:
+    image: rabbitmq:3-management
+    container_name: scale_tmean_5_rabbitmq_fog
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  mqtt_fog:
+    image: eclipse-mosquitto
+    container_name: scale_tmean_5_mqtt_fog
+    ports:
+      - "1883:1883"
+    volumes:
+      - /home/raspberrypi51/fed-grid-diplo/fog/mosquitto.conf:/mosquitto/config/mosquitto.conf
+
+  fog_app:
+    image: fog_node_app:latest
+    container_name: scale_tmean_5_fog_app
+    network_mode: host
+    environment:
+      - FOG_RABBITMQ_HOST=localhost
+      - CLOUD_RABBITMQ_HOST=192.168.1.8
+      - CLOUD_RABBITMQ_PORT=5673
+      - FOG_MQTT_HOST=localhost
+      - FOG_MQTT_PORT=1883
+      - CLOUD_MQTT_HOST=192.168.1.8
+      - CLOUD_MQTT_PORT=1884
+      - FOG_NAME=FOG_NODE_1
+      - EDGE_NAMES=edge_node_1,edge_node_2,edge_node_3,edge_node_4,edge_node_5
+      - ENCRYPTION_MODE=none
+      - AGGREGATION_STRATEGY=tmean
+      - KRUM_NUM_BYZANTINE=1
+      - APP_HOST_PORT=8081
+    depends_on:
+      - rabbitmq_fog
+      - mqtt_fog
+    command: uvicorn fog.communication.app_factory:app --host 0.0.0.0 --port 8081
+    volumes:
+      - /home/raspberrypi51/fed-grid-diplo/fog/models:/app/models
+      - /home/raspberrypi51/fed-grid-diplo/fog/models/outbox:/app/models/outbox
+    restart: on-failure
