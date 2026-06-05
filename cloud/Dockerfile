@@ -19,13 +19,5 @@ COPY cloud /app/cloud
 # Ορισμός του PYTHONPATH ώστε η Python να ψάχνει στο /app
 ENV PYTHONPATH="/app"
 
-# Δημιούργησε template model για CKKS (χρησιμοποιεί την ίδια έκδοση Keras με το container)
-RUN python3 -c "\
-import sys; sys.path.insert(0, '/app'); \
-from shared.model_architectures import create_model; \
-model = create_model(); \
-model.save('/app/shared/ckks_keys/model_template.keras'); \
-print('CKKS template created:', model.count_params(), 'params')"
-
 # Εκκίνηση με το module notation
 CMD ["python3", "-m", "cloud.communication.cloud_messaging"]
