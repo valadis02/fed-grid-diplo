@@ -10,7 +10,7 @@ RUN mkdir -p "/app/models" && \
 COPY fog/requirements.txt /app/
 
 # 2. Topology (Συγκεκριμένο όνομα αρχείου)
-COPY federated_topology.json /app/
+COPY edge/federated_topology.json /app/
 
 # System deps
 RUN apt-get update && apt-get install -y \
