@@ -1,16 +1,18 @@
 # =============================================================
-# Πείραμα 1: Federated Learning με 5 Edge Nodes (RPi5 limits)
-# Εκτέλεση: docker-compose -f experiment1.yml up
+# Πείραμα 1: Federated Learning με 5 Edge Nodes
+# Εκτέλεση από το root του project:
+#   docker compose -f experiments/ch7_exp1_fl_vs_centralized/experiment1.yml up
 # =============================================================
 
 networks:
   aqtf_shared_network:
     external: true
 
+services:
+
 # =============================================================
 # CLOUD
 # =============================================================
-services:
 
   cloud_app:
     image: cloud_node_app:latest
@@ -32,14 +34,14 @@ services:
       - aqtf_shared_network
     command: python3 -m cloud.communication.cloud_messaging
     volumes:
-      - ./cloud/models:/app/models
-      - ./cloud/status:/app/status
-      - ./data:/app/data:ro
+      - ../../cloud/models:/app/models
+      - ../../cloud/status:/app/status
+      - ../../data:/app/data:ro
     restart: on-failure
 
   exp1_rabbitmq_cloud:
     image: rabbitmq:3-management
-    container_name: rabbitmq_cloud
+    container_name: exp1_rabbitmq_cloud
     ports:
       - "5673:5672"
       - "15673:15672"
@@ -48,13 +50,13 @@ services:
 
   exp1_mqtt_cloud:
     image: eclipse-mosquitto
-    container_name: mqtt_cloud
+    container_name: exp1_mqtt_cloud
     ports:
       - "1884:1883"
     networks:
       - aqtf_shared_network
     volumes:
-      - ./cloud/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ../../cloud/mosquitto.conf:/mosquitto/config/mosquitto.conf
 
 # =============================================================
 # FOG
@@ -86,13 +88,13 @@ services:
       - aqtf_shared_network
     command: uvicorn fog.communication.app_factory:app --host 0.0.0.0 --port 8081
     volumes:
-      - ./fog/models:/app/models
-      - ./fog/models/outbox:/app/models/outbox
+      - ../../fog/models:/app/models
+      - ../../fog/models/outbox:/app/models/outbox
     restart: on-failure
 
   exp1_rabbitmq_fog:
     image: rabbitmq:3-management
-    container_name: rabbitmq_fog
+    container_name: exp1_rabbitmq_fog
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -101,14 +103,16 @@ services:
 
   exp1_mqtt_fog:
     image: eclipse-mosquitto
-    container_name: mqtt_fog
+    container_name: exp1_mqtt_fog
     ports:
       - "1883:1883"
     networks:
       - aqtf_shared_network
+    volumes:
+      - ../../cloud/mosquitto.conf:/mosquitto/config/mosquitto.conf
 
 # =============================================================
-# EDGE NODES (x5) — RPi5 resource limits
+# EDGE NODES (x5)
 # =============================================================
 
   edge_node_1:
@@ -130,8 +134,8 @@ services:
       - aqtf_shared_network
     command: python3 -m edge.model.run_federated_cycle
     volumes:
-      - ./data/house_1:/app/edge/data
-      - ./edge/models/node_1:/app/edge/models
+      - ../../data/house_1:/app/edge/data
+      - ../../edge/models/node_1:/app/edge/models
     deploy:
       resources:
         limits:
@@ -158,8 +162,8 @@ services:
       - aqtf_shared_network
     command: python3 -m edge.model.run_federated_cycle
     volumes:
-      - ./data/house_2:/app/edge/data
-      - ./edge/models/node_2:/app/edge/models
+      - ../../data/house_2:/app/edge/data
+      - ../../edge/models/node_2:/app/edge/models
     deploy:
       resources:
         limits:
@@ -186,8 +190,8 @@ services:
       - aqtf_shared_network
     command: python3 -m edge.model.run_federated_cycle
     volumes:
-      - ./data/house_3:/app/edge/data
-      - ./edge/models/node_3:/app/edge/models
+      - ../../data/house_3:/app/edge/data
+      - ../../edge/models/node_3:/app/edge/models
     deploy:
       resources:
         limits:
@@ -214,8 +218,8 @@ services:
       - aqtf_shared_network
     command: python3 -m edge.model.run_federated_cycle
     volumes:
-      - ./data/house_4:/app/edge/data
-      - ./edge/models/node_4:/app/edge/models
+      - ../../data/house_4:/app/edge/data
+      - ../../edge/models/node_4:/app/edge/models
     deploy:
       resources:
         limits:
@@ -242,8 +246,8 @@ services:
       - aqtf_shared_network
     command: python3 -m edge.model.run_federated_cycle
     volumes:
-      - ./data/house_5:/app/edge/data
-      - ./edge/models/node_5:/app/edge/models
+      - ../../data/house_5:/app/edge/data
+      - ../../edge/models/node_5:/app/edge/models
     deploy:
       resources:
         limits:
