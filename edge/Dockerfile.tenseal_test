@@ -1,0 +1,9 @@
+FROM python:3.10-slim
+RUN apt-get update && apt-get install -y build-essential python3-dev cmake git && rm -rf /var/lib/apt/lists/*
+RUN git clone https://github.com/OpenMined/TenSEAL.git /tmp/tenseal \
+    && cd /tmp/tenseal \
+    && git checkout v0.3.15 \
+    && git submodule update --init --recursive \
+    && pip install --no-cache-dir . \
+    && rm -rf /tmp/tenseal
+RUN python3 -c "import tenseal; print('TenSEAL OK:', tenseal.__version__)"

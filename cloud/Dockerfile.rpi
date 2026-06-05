@@ -1,0 +1,36 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    cmake \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY cloud/requirements.txt .
+
+# Εγκατάσταση όλων εκτός tenseal
+RUN grep -v tenseal requirements.txt | grep -v '^$' > /tmp/req_no_tenseal.txt \
+    && pip install --no-cache-dir -r /tmp/req_no_tenseal.txt
+# Compile tenseal v0.3.15 από source για arm64
+RUN git clone https://github.com/OpenMined/TenSEAL.git /tmp/tenseal \
+    && cd /tmp/tenseal \
+    && git checkout v0.3.15 \
+    && git submodule update --init --recursive \
+    && pip install --no-cache-dir . \
+    && rm -rf /tmp/tenseal
+
+COPY shared /app/shared
+COPY cloud /app/cloud
+
+RUN python3 -c "import sys; sys.path.insert(0, '/app'); \
+    from shared.model_architectures import create_model; \
+    model = create_model(); \
+    model.save('/app/shared/ckks_keys/model_template.keras'); \
+    print('Template created:', model.count_params(), 'params')"
+
+ENV PYTHONPATH="/app"
+
+CMD ["python3", "-m", "cloud.communication.cloud_messaging"]
