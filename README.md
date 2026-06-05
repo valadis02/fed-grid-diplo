@@ -14,10 +14,12 @@ This project implements a three-tier (Cloud–Fog–Edge) Federated Learning sys
 - Both devices must be on the **same local network**
 
 ### Software
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (latest version)
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (latest version) — **must be installed and running before any Docker command**
 - Python 3.10
 - PowerShell 7+ (for running `.ps1` scripts)
 - Git
+
+> **Important:** Before running any experiment, make sure Docker Desktop is open and fully started. You should see the Docker whale icon in your system tray (Windows) with status "Docker Desktop is running". If you get a "cannot connect to Docker daemon" error, open Docker Desktop and wait for it to finish loading.
 
 ### Python Libraries
 
