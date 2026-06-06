@@ -168,29 +168,6 @@ python create_fltrust_root_dataset.py
 python create_server_dataset.py
 ```
 
-### 6. Patch the pc YMLs to include EDGE_NAMES (required for PC-only runs)
-
-The `experiments_yml/pc/` YMLs run all three tiers (Cloud, Fog, Edge) on a single PC. By default the Fog service does not have `EDGE_NAMES` set, which causes it to aggregate after receiving the first edge model instead of waiting for all 10. Run this patch once before running any Chapter 8 experiment:
-
-```powershell
-Get-ChildItem "experiments_yml\pc\*.yml" | ForEach-Object {
-    $content = Get-Content $_.FullName -Raw -Encoding UTF8
-    if ($content -notmatch "EDGE_NAMES") {
-        $content = $content -replace '(\s+- AGGREGATION_STRATEGY=)', "`n      - EDGE_NAMES=edge_node_1,edge_node_2,edge_node_3,edge_node_4,edge_node_5,edge_node_6,edge_node_7,edge_node_8,edge_node_9,edge_node_10`$1"
-        Set-Content $_.FullName $content -Encoding UTF8
-        Write-Host "Patched: $($_.Name)"
-    } else {
-        Write-Host "Already OK: $($_.Name)"
-    }
-}
-```
-
-Verify the patch on one file:
-
-```powershell
-Select-String -Path "experiments_yml\pc\exp01_fedavg_no_attack_pc.yml" -Pattern "EDGE_NAMES"
-```
-
 ---
 
 ## Running the Experiments
@@ -257,8 +234,6 @@ PC_IP=<your_pc_ip> QUANTIZATION_MODE=pruned70 docker compose -f experiments/ch7_
 ### Chapter 8 — Byzantine Robustness (50 scenarios)
 
 The Byzantine experiments cover 5 aggregation algorithms × 3 attack types × 3 attacker ratios (10/20/30%). The `experiments_yml/pc/` YMLs are **fully self-contained**: each file includes Cloud, Fog, and all 10 Edge nodes, so no RPi is needed.
-
-> **Note:** Make sure you have applied the EDGE_NAMES patch (Step 6 above) before running any of these experiments. Without it, the Fog will aggregate after receiving just one edge model instead of all 10.
 
 #### Experiment numbering
 
