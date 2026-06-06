@@ -9,9 +9,9 @@ This project implements a three-tier (Cloud–Fog–Edge) Federated Learning sys
 ## Requirements
 
 ### Hardware
-- **PC** (Windows 10/11): runs Cloud, Edge nodes, and Docker Desktop
-- **Raspberry Pi 4 or 5** (optional, for Chapter 7 & 8 experiments): runs the Fog aggregator
-- Both devices must be on the **same local network**
+- **PC** (Windows 10/11): runs Cloud, Fog, and Edge nodes via Docker Desktop
+- **Raspberry Pi 4 or 5** (optional, for Chapter 7 & 8 scalability experiments): runs the Fog aggregator
+- Both devices must be on the **same local network** (RPi setup only)
 
 ### Software
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (latest version) — **must be installed and running before any Docker command**
@@ -103,9 +103,9 @@ fed-grid-diplo/
 │   ├── ch8_byzantine_robustness/
 │   └── ch8_scalability_rpi/
 ├── experiments_yml/            # Full Byzantine experiment YMLs (50 scenarios)
-│   ├── pc/                     # PC-side YMLs (cloud + edges)
+│   ├── pc/                     # PC-side YMLs (cloud + fog + edges, self-contained)
 │   ├── pc_replication/         # Replication run YMLs
-│   ├── rpi/                    # RPi-side YMLs (fog)
+│   ├── rpi/                    # RPi-side YMLs (fog only, requires RPi)
 │   └── rpi_scalability/        # Scalability experiment YMLs
 ├── centralized_training.py     # Baseline centralized training (Chapter 7)
 ├── benchmark_aggregation.py    # Aggregation scalability benchmark
@@ -117,6 +117,8 @@ fed-grid-diplo/
 ## Setup
 
 ### 1. Clone the repository
+
+> **Important:** Clone into your home directory or another user-writable location. Do **not** clone into `C:\WINDOWS\system32` or any other system directory — Docker volume mounts will fail with "Access is denied".
 
 ```bash
 git clone https://github.com/valadis02/fed-grid-diplo.git
@@ -164,6 +166,29 @@ This will preprocess the data into the format expected by the edge nodes.
 ```bash
 python create_fltrust_root_dataset.py
 python create_server_dataset.py
+```
+
+### 6. Patch the pc YMLs to include EDGE_NAMES (required for PC-only runs)
+
+The `experiments_yml/pc/` YMLs run all three tiers (Cloud, Fog, Edge) on a single PC. By default the Fog service does not have `EDGE_NAMES` set, which causes it to aggregate after receiving the first edge model instead of waiting for all 10. Run this patch once before running any Chapter 8 experiment:
+
+```powershell
+Get-ChildItem "experiments_yml\pc\*.yml" | ForEach-Object {
+    $content = Get-Content $_.FullName -Raw -Encoding UTF8
+    if ($content -notmatch "EDGE_NAMES") {
+        $content = $content -replace '(\s+- AGGREGATION_STRATEGY=)', "`n      - EDGE_NAMES=edge_node_1,edge_node_2,edge_node_3,edge_node_4,edge_node_5,edge_node_6,edge_node_7,edge_node_8,edge_node_9,edge_node_10`$1"
+        Set-Content $_.FullName $content -Encoding UTF8
+        Write-Host "Patched: $($_.Name)"
+    } else {
+        Write-Host "Already OK: $($_.Name)"
+    }
+}
+```
+
+Verify the patch on one file:
+
+```powershell
+Select-String -Path "experiments_yml\pc\exp01_fedavg_no_attack_pc.yml" -Pattern "EDGE_NAMES"
 ```
 
 ---
@@ -229,24 +254,116 @@ PC_IP=<your_pc_ip> QUANTIZATION_MODE=pruned70 docker compose -f experiments/ch7_
 
 ---
 
-### Chapter 8 — Byzantine Robustness (50 scenarios × 5 algorithms × 3 attacks × 3 attacker ratios)
+### Chapter 8 — Byzantine Robustness (50 scenarios)
 
-The Byzantine experiments are fully automated via PowerShell. The YMLs are pre-generated in `experiments_yml/`.
+The Byzantine experiments cover 5 aggregation algorithms × 3 attack types × 3 attacker ratios (10/20/30%). The `experiments_yml/pc/` YMLs are **fully self-contained**: each file includes Cloud, Fog, and all 10 Edge nodes, so no RPi is needed.
 
-**Step 1** — Start the Fog on the RPi for each experiment. The script will prompt you when to do this.
+> **Note:** Make sure you have applied the EDGE_NAMES patch (Step 6 above) before running any of these experiments. Without it, the Fog will aggregate after receiving just one edge model instead of all 10.
 
-**Step 2** — On the PC, run the orchestration script:
+#### Experiment numbering
+
+| ID | Algorithm | Attack | Attackers |
+|----|-----------|--------|-----------|
+| 01 | FedAvg | none | 0% |
+| 02 | FedAvg | label flipping | 10% |
+| 03 | FedAvg | sign flipping | 10% |
+| 04 | FedAvg | gaussian noise | 10% |
+| 05 | FedAvg | label flipping | 20% |
+| 06 | FedAvg | sign flipping | 20% |
+| 07 | FedAvg | gaussian noise | 20% |
+| 08 | FedAvg | label flipping | 30% |
+| 09 | FedAvg | sign flipping | 30% |
+| 10 | FedAvg | gaussian noise | 30% |
+| 11–20 | Krum | (same attack progression) | 10/20/30% |
+| 21–30 | Multi-Krum | (same attack progression) | 10/20/30% |
+| 31–40 | Trimmed Mean | (same attack progression) | 10/20/30% |
+| 41–50 | FLTrust | (same attack progression) | 10/20/30% |
+
+#### Run all 50 experiments (automated)
 
 ```powershell
 .\experiments\ch8_byzantine_robustness\run_all_experiments.ps1
 ```
 
 To resume from a specific experiment (e.g. experiment 15):
+
 ```powershell
 .\experiments\ch8_byzantine_robustness\run_all_experiments.ps1 -StartFrom 15
 ```
 
-Results are saved automatically to `results/replication_run/`.
+Results (logs + metrics) are saved automatically to `results/replication_run/<exp_name>/`.
+
+#### Run a single experiment manually
+
+Each pc YML is self-contained. You can run any individual scenario directly:
+
+```powershell
+docker compose -f experiments_yml\pc\exp01_fedavg_no_attack_pc.yml up --abort-on-container-exit --exit-code-from cloud_app
+```
+
+When done, tear down:
+
+```powershell
+docker compose -f experiments_yml\pc\exp01_fedavg_no_attack_pc.yml down
+```
+
+#### Example 1 — FedAvg, no attack (baseline)
+
+Runs FedAvg with 10 honest edge nodes and no attackers. Expected result: R² converges smoothly toward ~0.75–0.85 over 15 rounds.
+
+```powershell
+docker compose -f experiments_yml\pc\exp01_fedavg_no_attack_pc.yml up --abort-on-container-exit --exit-code-from cloud_app
+```
+
+Monitor the global model performance live:
+
+```powershell
+docker logs exp01_cloud_app -f
+```
+
+Look for lines like:
+```
+Cloud eval [Round 6]: MSE=0.0906 | MAE=0.2079 | R²=0.7579
+```
+
+#### Example 2 — FedAvg, Gaussian noise, 20% attackers
+
+Runs FedAvg with 2 out of 10 edges sending Gaussian noise updates. Expected result: FedAvg collapses immediately — R² stays deeply negative throughout all 15 rounds, demonstrating its vulnerability to Gaussian noise.
+
+```powershell
+docker compose -f experiments_yml\pc\exp07_fedavg_ga_20pct_pc.yml up --abort-on-container-exit --exit-code-from cloud_app
+```
+
+Monitor:
+
+```powershell
+docker logs exp07_cloud_app -f
+```
+
+Expected output:
+```
+Cloud eval [Round 1]: MSE=43496532.0000 | MAE=5021.2725 | R²=-116257920.0000
+```
+
+Tear down between experiments:
+
+```powershell
+docker compose -f experiments_yml\pc\exp07_fedavg_ga_20pct_pc.yml down
+```
+
+#### Monitoring during any experiment
+
+To watch cloud metrics in real time:
+
+```powershell
+docker logs <exp_id>_cloud_app -f
+```
+
+To check fog aggregation (confirms all 10 edges participated — look for `n_clients=10`):
+
+```powershell
+docker logs <exp_id>_fog_app | Select-String "AGG METRICS"
+```
 
 ---
 
