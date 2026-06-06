@@ -366,4 +366,4 @@ The London Smart Meter dataset (LCL) used in Chapter 8 is provided by UK Power N
 
 If you use this work, please cite:
 
-> Tsirindanis, C. (2026). *Byzantine Fault-Tolerant Federated Learning for Smart Energy Grids*. Diploma Thesis, School of Electrical and Computer Engineering, NTUA.
+> Tsirindanis, Ch. (2026). *Byzantine Fault-Tolerant Federated Learning for Smart Energy Grids*. Diploma Thesis, School of Electrical and Computer Engineering, NTUA.
