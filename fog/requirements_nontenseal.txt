@@ -10,3 +10,4 @@ psutil==7.0.0
 paho-mqtt
 numpy
 cryptography>=42.0.0
+pandas
