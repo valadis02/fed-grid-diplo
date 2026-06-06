@@ -1,4 +1,4 @@
-# =============================================================
+﻿# =============================================================
 # Algorithm : KRUM
 # Attack    : gaussian_noise | 2/10 attackers (houses [9, 10])
 # Attacker% : 20%
@@ -78,6 +78,7 @@ services:
       - CLOUD_RABBITMQ_HOST=exp17_rabbitmq_cloud
       - CLOUD_MQTT_HOST=exp17_mqtt_cloud
       - CLOUD_MQTT_PORT=1883
+      - EDGE_NAMES=edge_node_1,edge_node_2,edge_node_3,edge_node_4,edge_node_5,edge_node_6,edge_node_7,edge_node_8,edge_node_9,edge_node_10
       - AGGREGATION_STRATEGY=krum
       - KRUM_NUM_BYZANTINE=2
       - MULTI_KRUM_M=0
@@ -428,3 +429,4 @@ services:
           cpus: '1.0'
           memory: 3g
     restart: on-failure
+
