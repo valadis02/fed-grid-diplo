@@ -1,10 +1,22 @@
 #!/bin/bash
-ALGORITHMS=("fedavg" "krum" "multi_krum" "tmean")
-TOPOLOGIES=(5 10 20)
+ALL_ALGORITHMS=("fedavg" "krum" "multi_krum" "tmean" "fltrust")
+ALL_TOPOLOGIES=(5 10 20)
 MAX_ROUNDS=10
 TIMEOUT=600
 OUTPUT_DIR="$HOME/fed-grid-diplo/results/scalability"
 YML_DIR="$HOME/fed-grid-diplo/experiments_yml/rpi_scalability"
+
+# Optional args: --start-algo <algo> --start-topo <n>
+START_ALGO=""
+START_TOPO=0
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --start-algo) START_ALGO="$2"; shift 2 ;;
+        --start-topo) START_TOPO="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -60,7 +72,7 @@ run_experiment() {
 
     echo ""
     echo "  >> Στον PC τρέξε:"
-    echo "     docker-compose -f experiments_yml/pc_scalability/scale_${algo}_${n}_pc.yml up"
+    echo "     docker compose -f experiments_yml/pc_scalability/scale_${algo}_${n}_pc.yml up"
     echo ""
     echo "  Πάτα ENTER όταν ξεκινήσουν τα edges στον PC..."
     read
@@ -89,22 +101,35 @@ run_experiment() {
 
     echo ""
     echo "  >> Στον PC κάνε down τα edges:"
-    echo "     docker-compose -f experiments_yml/pc_scalability/scale_${algo}_${n}_pc.yml down"
+    echo "     docker compose -f experiments_yml/pc_scalability/scale_${algo}_${n}_pc.yml down"
     echo ""
     echo "  Πάτα ENTER για να συνεχίσεις στον επόμενο συνδυασμό..."
     read
 }
 
+# Build list of experiments to run, skipping until start point
+skip=true
+if [ -z "$START_ALGO" ]; then skip=false; fi
+
 echo "============================================"
 echo " Scalability Benchmark - RPi Orchestrator"
-echo " Algorithms : ${ALGORITHMS[@]}"
-echo " Topologies : ${TOPOLOGIES[@]}"
+echo " Algorithms : ${ALL_ALGORITHMS[@]}"
+echo " Topologies : ${ALL_TOPOLOGIES[@]}"
 echo " Max rounds : $MAX_ROUNDS ή ${TIMEOUT}s"
 echo " Output     : $OUTPUT_DIR"
+[ -n "$START_ALGO" ] && echo " Starting from: $START_ALGO $START_TOPO"
 echo "============================================"
 
-for algo in "${ALGORITHMS[@]}"; do
-    for n in "${TOPOLOGIES[@]}"; do
+for algo in "${ALL_ALGORITHMS[@]}"; do
+    for n in "${ALL_TOPOLOGIES[@]}"; do
+        # Check if we've reached the start point
+        if $skip; then
+            if [ "$algo" = "$START_ALGO" ] && { [ "$START_TOPO" -eq 0 ] || [ "$n" -eq "$START_TOPO" ]; }; then
+                skip=false
+            else
+                continue
+            fi
+        fi
         run_experiment "$algo" "$n"
     done
 done

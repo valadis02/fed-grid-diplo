@@ -4,11 +4,11 @@ RUN mkdir -p "/app/models" && mkdir -p "/app/models/outbox"
 RUN apt-get update && apt-get install -y \
     build-essential python3-dev iputils-ping dnsutils iproute2 \
     && rm -rf /var/lib/apt/lists/*
-COPY fog/requirements.notenseal.txt /app/requirements.txt
+COPY fog/requirements_nontenseal.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY fog /app/fog
 COPY shared /app/shared
-COPY fog/federated_topology.json /app/
+COPY edge/federated_topology.json /app/
 ENV PYTHONPATH=/app:/app/fog:/app/shared
 EXPOSE 8081
 CMD ["uvicorn", "fog.communication.app_factory:app", "--host", "0.0.0.0", "--port", "8081"]

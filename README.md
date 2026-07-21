@@ -9,9 +9,9 @@ This project implements a three-tier (Cloud–Fog–Edge) Federated Learning sys
 ## Requirements
 
 ### Hardware
-- **PC** (Windows 10/11): runs Cloud, Edge nodes, and Docker Desktop
-- **Raspberry Pi 4 or 5** (optional, for Chapter 7 & 8 experiments): runs the Fog aggregator
-- Both devices must be on the **same local network**
+- **PC** (Windows 10/11): runs Cloud, Fog, and Edge nodes via Docker Desktop
+- **Raspberry Pi 4 or 5** (optional, for Chapter 7 & 8 scalability experiments): runs the Fog aggregator
+- Both devices must be on the **same local network** (RPi setup only)
 
 ### Software
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (latest version) — **must be installed and running before any Docker command**
@@ -102,11 +102,12 @@ fed-grid-diplo/
 │   ├── ch7_exp5_pruning/
 │   ├── ch8_byzantine_robustness/
 │   └── ch8_scalability_rpi/
-├── experiments_yml/            # Full Byzantine experiment YMLs (50 scenarios)
-│   ├── pc/                     # PC-side YMLs (cloud + edges)
+├── experiments_yml/            # Full Byzantine experiment YMLs
+│   ├── pc/                     # PC-side YMLs (cloud + fog + edges, self-contained)
 │   ├── pc_replication/         # Replication run YMLs
-│   ├── rpi/                    # RPi-side YMLs (fog)
-│   └── rpi_scalability/        # Scalability experiment YMLs
+│   ├── pc_scalability/         # PC-side YMLs for scalability (cloud + edges)
+│   ├── rpi/                    # RPi-side YMLs (fog only, requires RPi)
+│   └── rpi_scalability/        # RPi-side YMLs for scalability (fog only)
 ├── centralized_training.py     # Baseline centralized training (Chapter 7)
 ├── benchmark_aggregation.py    # Aggregation scalability benchmark
 └── prepare_london_data.py      # LCL dataset preprocessing
@@ -118,22 +119,43 @@ fed-grid-diplo/
 
 ### 1. Clone the repository
 
+> **Important:** Clone into your home directory or another user-writable location. Do **not** clone into `C:\WINDOWS\system32` or any other system directory — Docker volume mounts will fail with "Access is denied".
+
+**On the PC:**
 ```bash
 git clone https://github.com/valadis02/fed-grid-diplo.git
 cd fed-grid-diplo
 ```
 
-### 2. Create the Docker network
+**On the RPi** (for scalability experiments):
+```bash
+git clone https://github.com/valadis02/fed-grid-diplo.git
+cd fed-grid-diplo
+```
 
-All containers communicate over a shared Docker network. Create it once:
+### 2. Install Docker on the RPi (scalability experiments only)
 
+```bash
+curl -sSL https://get.docker.com | sh
+sudo usermod -aG docker $USER
+```
+
+Log out and back in, then verify:
+
+```bash
+docker --version
+```
+
+### 3. Create the Docker network
+
+**On the PC:**
 ```bash
 docker network create aqtf_shared_network
 ```
 
-### 3. Build the Docker images
+### 4. Build the Docker images
 
-Build the three images from the project root:
+**On the PC**, build from the project root:
 
 ```bash
 # Cloud node
@@ -144,12 +166,34 @@ docker build -f edge/Dockerfile -t edge-node:latest .
 
 # Fog node (PC)
 docker build -f fog/Dockerfile -t fog_node_app:latest .
-
-# Fog node (Raspberry Pi — run this on the RPi)
-docker build -f fog/Dockerfile.rpi -t fog_node_app:arm64 .
 ```
 
-### 4. Prepare the London Smart Meter dataset (Chapter 8 only)
+**On the RPi**, build the ARM64 fog image:
+
+```bash
+docker build --no-cache -f fog/Dockerfile.rpi -t fog_node_app:arm64 .
+```
+
+> **Note:** The RPi build takes 10–15 minutes. The Dockerfile.rpi uses `fog/requirements_nontenseal.txt` (no TensorSeal) and `edge/federated_topology.json`. If the build fails on first attempt due to network timeouts, run it again — Docker will resume from cache.
+
+The RPi fog image also requires `rabbitmq:3-management` and `eclipse-mosquitto`. If the RPi cannot pull them due to network issues, transfer them from the PC:
+
+```powershell
+# On the PC
+docker pull --platform linux/arm64 rabbitmq:3-management
+docker save rabbitmq:3-management -o rabbitmq_arm64.tar
+docker save eclipse-mosquitto -o mosquitto.tar
+scp rabbitmq_arm64.tar <rpi_user>@<rpi_hostname>:~/
+scp mosquitto.tar <rpi_user>@<rpi_hostname>:~/
+```
+
+```bash
+# On the RPi
+docker load -i ~/rabbitmq_arm64.tar
+docker load -i ~/mosquitto.tar
+```
+
+### 5. Prepare the London Smart Meter dataset (Chapter 8 only)
 
 Download the LCL dataset from [UK Data Service](https://beta.ukdataservice.ac.uk/datacatalogue/studies/study?id=7857) and place the raw CSV files in `lcl_data/`. Then run:
 
@@ -157,9 +201,7 @@ Download the LCL dataset from [UK Data Service](https://beta.ukdataservice.ac.uk
 python prepare_london_data.py
 ```
 
-This will preprocess the data into the format expected by the edge nodes.
-
-### 5. Prepare the FLTrust root dataset (Chapter 8, FLTrust experiments only)
+### 6. Prepare the FLTrust root dataset (Chapter 8, FLTrust experiments only)
 
 ```bash
 python create_fltrust_root_dataset.py
@@ -229,38 +271,250 @@ PC_IP=<your_pc_ip> QUANTIZATION_MODE=pruned70 docker compose -f experiments/ch7_
 
 ---
 
-### Chapter 8 — Byzantine Robustness (50 scenarios × 5 algorithms × 3 attacks × 3 attacker ratios)
+### Chapter 8 — Byzantine Robustness (50 scenarios)
 
-The Byzantine experiments are fully automated via PowerShell. The YMLs are pre-generated in `experiments_yml/`.
+The Byzantine experiments cover 5 aggregation algorithms × 3 attack types × 3 attacker ratios (10/20/30%). The `experiments_yml/pc/` YMLs are **fully self-contained**: each file includes Cloud, Fog, and all 10 Edge nodes, so no RPi is needed.
 
-**Step 1** — Start the Fog on the RPi for each experiment. The script will prompt you when to do this.
+#### Experiment numbering
 
-**Step 2** — On the PC, run the orchestration script:
+| ID | Algorithm | Attack | Attackers |
+|----|-----------|--------|-----------|
+| 01 | FedAvg | none | 0% |
+| 02 | FedAvg | label flipping | 10% |
+| 03 | FedAvg | sign flipping | 10% |
+| 04 | FedAvg | gaussian noise | 10% |
+| 05 | FedAvg | label flipping | 20% |
+| 06 | FedAvg | sign flipping | 20% |
+| 07 | FedAvg | gaussian noise | 20% |
+| 08 | FedAvg | label flipping | 30% |
+| 09 | FedAvg | sign flipping | 30% |
+| 10 | FedAvg | gaussian noise | 30% |
+| 11–20 | Krum | (same attack progression) | 10/20/30% |
+| 21–30 | Multi-Krum | (same attack progression) | 10/20/30% |
+| 31–40 | Trimmed Mean | (same attack progression) | 10/20/30% |
+| 41–50 | FLTrust | (same attack progression) | 10/20/30% |
+
+#### Run all 50 experiments (automated)
 
 ```powershell
 .\experiments\ch8_byzantine_robustness\run_all_experiments.ps1
 ```
 
 To resume from a specific experiment (e.g. experiment 15):
+
 ```powershell
 .\experiments\ch8_byzantine_robustness\run_all_experiments.ps1 -StartFrom 15
 ```
 
-Results are saved automatically to `results/replication_run/`.
+Results (logs + metrics) are saved automatically to `results/replication_run/<exp_name>/`.
+
+#### Run a single experiment manually
+
+Each pc YML is self-contained. You can run any individual scenario directly:
+
+```powershell
+docker compose -f experiments_yml\pc\exp01_fedavg_no_attack_pc.yml up --abort-on-container-exit --exit-code-from cloud_app
+```
+
+When done, tear down:
+
+```powershell
+docker compose -f experiments_yml\pc\exp01_fedavg_no_attack_pc.yml down
+```
+
+#### Example 1 — FedAvg, no attack (baseline)
+
+Runs FedAvg with 10 honest edge nodes and no attackers. Expected result: R² converges smoothly toward ~0.75–0.85 over 15 rounds.
+
+```powershell
+docker compose -f experiments_yml\pc\exp01_fedavg_no_attack_pc.yml up --abort-on-container-exit --exit-code-from cloud_app
+```
+
+Monitor the global model performance live:
+
+```powershell
+docker logs exp01_cloud_app -f
+```
+
+Look for lines like:
+```
+Cloud eval [Round 6]: MSE=0.0906 | MAE=0.2079 | R²=0.7579
+```
+
+#### Example 2 — FedAvg, Gaussian noise, 20% attackers
+
+Runs FedAvg with 2 out of 10 edges sending Gaussian noise updates. Expected result: FedAvg collapses immediately — R² stays deeply negative throughout all 15 rounds, demonstrating its vulnerability to Gaussian noise.
+
+```powershell
+docker compose -f experiments_yml\pc\exp07_fedavg_ga_20pct_pc.yml up --abort-on-container-exit --exit-code-from cloud_app
+```
+
+Monitor:
+
+```powershell
+docker logs exp07_cloud_app -f
+```
+
+Expected output:
+```
+Cloud eval [Round 1]: MSE=43496532.0000 | MAE=5021.2725 | R²=-116257920.0000
+```
+
+Tear down between experiments:
+
+```powershell
+docker compose -f experiments_yml\pc\exp07_fedavg_ga_20pct_pc.yml down
+```
+
+#### Monitoring during any experiment
+
+To watch cloud metrics in real time:
+
+```powershell
+docker logs <exp_id>_cloud_app -f
+```
+
+To check fog aggregation (confirms all 10 edges participated — look for `n_clients=10`):
+
+```powershell
+docker logs <exp_id>_fog_app | Select-String "AGG METRICS"
+```
 
 ---
 
-### Chapter 8 — Scalability Benchmarks (RPi 4 & 5, 5–50 nodes)
+### Chapter 8 — Scalability Benchmarks (RPi 4 & 5, 5–20 nodes)
 
-**On the RPi**, run the scalability orchestration script:
+These experiments measure aggregation time, RAM usage, and CPU temperature of the Fog node running on a Raspberry Pi across 5 algorithms and 3 topologies (5, 10, 20 nodes). The Fog runs on the RPi; Cloud and Edge nodes run on the PC.
+
+The same procedure works for both RPi 4 and RPi 5 — the only difference is performance.
+
+#### Architecture
+
+```
+PC (Windows)                          RPi (Fog)
+─────────────────────────────         ──────────────────────
+Cloud node        ←── model ───────→  fog_app (arm64)
+Edge nodes 1..N   ──── model ──────→  rabbitmq_fog
+                                       mqtt_fog
+```
+
+#### Network requirements
+
+Both devices must be on the same local network. Note the IPs of each:
+
+```powershell
+# On the PC
+ipconfig | Select-String "IPv4"
+```
+
+```bash
+# On the RPi
+hostname -I
+```
+
+The `rpi_scalability` YMLs already have the correct IP hardcoded. If your PC IP differs from `192.168.1.5`, update all rpi YMLs:
+
+```bash
+# On the RPi
+find experiments_yml/rpi_scalability/ -name "*.yml" | xargs sed -i 's/192\.168\.1\.5/<your_pc_ip>/g'
+```
+
+#### Run all scalability experiments (automated)
+
+On the **RPi**, run the orchestration script:
 
 ```bash
 bash experiments/ch8_scalability_rpi/run_scalability_benchmarks.sh
 ```
 
-The script will prompt you to start the corresponding PC-side containers from `experiments_yml/pc_scalability/` for each topology.
+To start from a specific algorithm and topology:
 
-Results are saved to `~/fed-grid-diplo/results/scalability/`.
+```bash
+bash experiments/ch8_scalability_rpi/run_scalability_benchmarks.sh --start-algo fltrust --start-topo 10
+```
+
+For each experiment the script will:
+1. Start the Fog containers on the RPi automatically
+2. Print the command to run on the PC
+3. Wait for you to press ENTER after starting the edges on the PC
+4. Collect 10 rounds of aggregation metrics
+5. Save results to `~/fed-grid-diplo/results/scalability/metrics_<algo>_<n>.json`
+6. Tear down and move to the next experiment
+
+#### Example 1 — FedAvg, 10 nodes
+
+**Step 1** — Start the script on the RPi (or wait for it to reach this experiment):
+
+```bash
+bash experiments/ch8_scalability_rpi/run_scalability_benchmarks.sh --start-algo fedavg --start-topo 10
+```
+
+**Step 2** — When the script prints the prompt, run this on the **PC**:
+
+```powershell
+docker compose -f experiments_yml\pc_scalability\scale_fedavg_10_pc.yml up
+```
+
+**Step 3** — Press ENTER on the RPi. The script collects metrics automatically.
+
+**Step 4** — When done, tear down on the **PC**:
+
+```powershell
+docker compose -f experiments_yml\pc_scalability\scale_fedavg_10_pc.yml down
+```
+
+Press ENTER on the RPi to continue to the next experiment.
+
+Monitor fog aggregation in real time (separate RPi terminal):
+
+```bash
+docker logs scale_fedavg_10_fog_app -f | grep "AGG METRICS"
+```
+
+Expected output:
+```
+[AGG METRICS] strategy=FEDAVG | n_clients=10 | agg_time=0.0009s | total_time=1.11s | peak_ram=612.3MB | cpu_temp_before=52.1C | cpu_temp_after=53.4C
+```
+
+#### Example 2 — FLTrust, 10 nodes
+
+**Step 1** — Start from FLTrust 10:
+
+```bash
+bash experiments/ch8_scalability_rpi/run_scalability_benchmarks.sh --start-algo fltrust --start-topo 10
+```
+
+**Step 2** — On the **PC**:
+
+```powershell
+docker compose -f experiments_yml\pc_scalability\scale_fltrust_10_pc.yml up
+```
+
+**Step 3** — Press ENTER on the RPi.
+
+**Step 4** — When done, on the **PC**:
+
+```powershell
+docker compose -f experiments_yml\pc_scalability\scale_fltrust_10_pc.yml down
+```
+
+Monitor:
+
+```bash
+docker logs scale_fltrust_10_fog_app -f | grep "AGG METRICS"
+```
+
+Expected output (FLTrust has higher agg_time due to cosine similarity computation):
+```
+[AGG METRICS] strategy=FLTRUST | n_clients=10 | agg_time=0.0820s | total_time=1.12s | peak_ram=631.5MB | cpu_temp_before=54.0C | cpu_temp_after=55.5C
+```
+
+#### View saved results
+
+```bash
+cat ~/fed-grid-diplo/results/scalability/metrics_fedavg_10.json
+cat ~/fed-grid-diplo/results/scalability/metrics_fltrust_10.json
+```
 
 ---
 
@@ -274,4 +528,4 @@ The London Smart Meter dataset (LCL) used in Chapter 8 is provided by UK Power N
 
 If you use this work, please cite:
 
-> Tsirindanis, C. (2026). *Byzantine Fault-Tolerant Federated Learning for Smart Energy Grids*. Diploma Thesis, School of Electrical and Computer Engineering, NTUA.
+> Tsirindanis, Ch. (2026). *Byzantine Fault-Tolerant Federated Learning for Smart Energy Grids*. Diploma Thesis, School of Electrical and Computer Engineering, NTUA.

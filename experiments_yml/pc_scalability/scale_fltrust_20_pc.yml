@@ -53,9 +53,9 @@ services:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_1
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_1
       - MAX_ROUNDS=7
@@ -78,14 +78,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_2:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_2
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_2
       - MAX_ROUNDS=7
@@ -108,14 +107,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_3:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_3
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_3
       - MAX_ROUNDS=7
@@ -138,14 +136,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_4:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_4
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_4
       - MAX_ROUNDS=7
@@ -168,14 +165,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_5:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_5
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_5
       - MAX_ROUNDS=7
@@ -198,14 +194,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_6:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_6
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_6
       - MAX_ROUNDS=7
@@ -228,14 +223,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_7:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_7
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_7
       - MAX_ROUNDS=7
@@ -258,14 +252,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_8:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_8
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_8
       - MAX_ROUNDS=7
@@ -288,14 +281,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_9:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_9
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_9
       - MAX_ROUNDS=7
@@ -318,14 +310,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_10:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_10
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_10
       - MAX_ROUNDS=7
@@ -348,14 +339,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_11:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_11
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_11
       - MAX_ROUNDS=7
@@ -378,14 +368,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_12:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_12
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_12
       - MAX_ROUNDS=7
@@ -408,14 +397,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_13:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_13
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_13
       - MAX_ROUNDS=7
@@ -438,14 +426,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_14:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_14
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_14
       - MAX_ROUNDS=7
@@ -468,14 +455,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_15:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_15
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_15
       - MAX_ROUNDS=7
@@ -498,14 +484,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_16:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_16
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_16
       - MAX_ROUNDS=7
@@ -528,14 +513,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_17:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_17
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_17
       - MAX_ROUNDS=7
@@ -558,14 +542,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_18:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_18
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_18
       - MAX_ROUNDS=7
@@ -588,14 +571,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_19:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_19
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_19
       - MAX_ROUNDS=7
@@ -618,14 +600,13 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
   edge_node_20:
     image: edge-node:latest
     container_name: scale_fltrust_20_edge_20
     environment:
-      - FOG_RABBITMQ_HOST=192.168.1.9
+      - FOG_RABBITMQ_HOST=192.168.1.6
       - FOG_RABBITMQ_PORT=5672
-      - FOG_MQTT_HOST=192.168.1.9
+      - FOG_MQTT_HOST=192.168.1.6
       - FOG_MQTT_PORT=1883
       - EDGE_NAME=edge_node_20
       - MAX_ROUNDS=7
@@ -648,4 +629,3 @@ services:
           cpus: '1.0'
           memory: 2g
     restart: on-failure
-
