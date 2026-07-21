@@ -3,9 +3,11 @@ from shared.utils import required_columns
 from shared.logging_config import logger
 
 # ---------------------------------------------------------------
-# MLP Baseline αρχιτεκτονική:
-# Flatten -> Dense(150) -> Dropout(0.2) -> Dense(75) -> Dropout(0.2) -> Dense(1)
-# ~120K παράμετροι, κατάλληλο για scalability benchmarking.
+# MLP Baseline αρχιτεκτονική (μειωμένη έκδοση, ~48K params):
+# Flatten -> Dense(64) -> Dropout(0.2) -> Dense(32) -> Dropout(0.2) -> Dense(1)
+# ~48K παράμετροι — μειωμένη από την αρχική Dense(150)->Dense(75) (~120K)
+# για ταχύτερα πειράματα σε RPi hardware. Ενημέρωσε το paper's Section V
+# (Model paragraph) ώστε να αναφέρει ~48K αντί για ~119K παραμέτρους.
 # ---------------------------------------------------------------
 
 _KNOWN_LABELS = {
@@ -34,7 +36,7 @@ def create_model(model_label_or_seq_len=48,
     Δέχεται είτε:
       - string label → αγνοείται, χτίζει πάντα MLP baseline
       - int sequence_length (π.χ. 48) → χρησιμοποιείται ως sequence length
-    ~120K παράμετροι: Flatten + Dense(150) + Dense(75) + Dense(1).
+    ~48K παράμετροι: Flatten + Dense(64) + Dense(32) + Dense(1).
     """
     if isinstance(model_label_or_seq_len, str):
         if model_label_or_seq_len not in _KNOWN_LABELS:
@@ -50,9 +52,9 @@ def create_model(model_label_or_seq_len=48,
         shape=(sequence_length, _num_features()), dtype=tf.float32
     )
     x = tf.keras.layers.Flatten()(inputs)
-    x = tf.keras.layers.Dense(150, activation='relu')(x)
+    x = tf.keras.layers.Dense(64, activation='relu')(x)
     x = tf.keras.layers.Dropout(0.2)(x)
-    x = tf.keras.layers.Dense(75, activation='relu')(x)
+    x = tf.keras.layers.Dense(32, activation='relu')(x)
     x = tf.keras.layers.Dropout(0.2)(x)
     outputs = tf.keras.layers.Dense(1)(x)
 
