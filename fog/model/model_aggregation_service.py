@@ -10,13 +10,13 @@ from fog.model.fltrust2_server_training import train_server_model as fltrust2_tr
 from shared.utils import delete_files_containing
 from shared.logging_config import logger
 
-# β”€β”€ Aggregation strategy β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── Aggregation strategy ──────────────────────────────────────────────────────
 AGGREGATION_STRATEGY  = os.getenv('AGGREGATION_STRATEGY', 'fedavg').lower()
 NUM_BYZANTINE         = int(os.getenv('KRUM_NUM_BYZANTINE', '0'))
 MULTI_KRUM_M          = int(os.getenv('MULTI_KRUM_M', '0'))
 TMEAN_TRIM_FRACTION   = float(os.getenv('TMEAN_TRIM_FRACTION', '0.0'))
 
-# β”€β”€ FLTrust Parameters β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FLTrust Parameters ────────────────────────────────────────────────────────
 FLTRUST_ROOT_DATA_PATH    = os.getenv('FLTRUST_ROOT_DATA_PATH', '')
 FLTRUST_LR                = float(os.getenv('FLTRUST_LR', '0.001'))
 FLTRUST_EPOCHS            = int(os.getenv('FLTRUST_EPOCHS', '1'))
@@ -31,7 +31,7 @@ FLTRUST_PREV_WEIGHTS_PATH = os.getenv(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fltrust_prev_weights.npz')
 )
 
-# β”€β”€ FedEMA Parameters β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FedEMA Parameters ─────────────────────────────────────────────────────────
 FEDEMA_MIN_ROUNDS     = int(os.getenv('FEDEMA_MIN_ROUNDS', '3'))
 FEDEMA_RANSAC_ITERS   = int(os.getenv('FEDEMA_RANSAC_ITERS', '30'))
 FEDEMA_SAMPLE_SIZE    = int(os.getenv('FEDEMA_SAMPLE_SIZE', '3'))
@@ -39,14 +39,38 @@ FEDEMA_THRESHOLD_K    = float(os.getenv('FEDEMA_THRESHOLD_K', '0.10'))
 FEDEMA_REFIT_STEPS    = int(os.getenv('FEDEMA_REFIT_STEPS', '200'))
 FEDEMA_COS_THRESHOLD  = float(os.getenv('FEDEMA_COS_THRESHOLD', '0.5'))
 
-# β”€β”€ FedConsensus Parameters β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FedConsensus Parameters ───────────────────────────────────────────────────
 FEDCONSENSUS_MAD_K = float(os.getenv('FEDCONSENSUS_MAD_K', '1.4826'))
 
-# β”€β”€ FedConsensus-P Parameters β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# Σταθερό trim (ΟΧΙ per-scenario oracle) για τον γύρο 1, όταν δεν υπάρχει
+# κανένα reference model (ούτε fog_model.keras ούτε round-0 broadcast).
+# Χρησιμοποιείται ΜΟΝΟ ως προστασία έναντι καταστροφικής κατάρρευσης του
+# FedAvg fallback (π.χ. Gaussian Noise) πριν υπάρξει reference σημείο για
+# το peer-to-peer trust. Ίδια τιμή σε ΟΛΑ τα σενάρια πειραμάτων (δεν
+# προσαρμόζεται στον πραγματικό αριθμό επιτιθέμενων ανά run) — αντιστοιχεί
+# στο worst-case (3/10 = 30%) της πειραματικής διάταξης.
+ROUND1_FIXED_TRIM = int(os.getenv('ROUND1_FIXED_TRIM', '3'))
+
+# ── FedConsensus-P Parameters ─────────────────────────────────────────────────
 FCP_EMA_BETA           = float(os.getenv('FCP_EMA_BETA', '0.5'))
 FCP_MODELS_DIR         = os.getenv(
     'FCP_MODELS_DIR',
     os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fcp_models')
+)
+
+# ── Round-0 reference model (για peer-to-peer trust από τον 1ο γύρο) ─────────
+# Το μοντέλο που broadcast-άρεται σε όλους τους edges ΠΡΙΝ τον γύρο 1 — το
+# κοινό σημείο εκκίνησης όλων των κόμβων. Χρησιμοποιείται ως w_prev στο πρώτο
+# aggregation ώστε το peer-to-peer trust voting (FedConsensus/-SV/-P) να
+# λειτουργεί ήδη από τον γύρο 1, αντί να πέφτει σε FedAvg fallback.
+#
+# ΣΗΜΑΝΤΙΚΟ: αν ο fog αποθηκεύει ήδη κάπου αλλού το αρχικό broadcast μοντέλο
+# (π.χ. σε module αρχικοποίησης πριν το πρώτο fog_messaging round), προτίμησε
+# ΕΚΕΙΝΟ το path αντί για αυτό εδώ — άλλαξε FOG_INITIAL_MODEL_PATH ώστε να
+# δείχνει στο ίδιο αρχείο, ώστε να μην αποθηκεύεται δύο φορές το ίδιο μοντέλο.
+FOG_INITIAL_MODEL_PATH = os.getenv(
+    'FOG_INITIAL_MODEL_PATH',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fog_initial_model.keras')
 )
 
 logger.info(
@@ -54,14 +78,14 @@ logger.info(
     f"num_byzantine={NUM_BYZANTINE}"
 )
 
-# β”€β”€ FedEMA global state β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FedEMA global state ───────────────────────────────────────────────────────
 _fedema_history: dict = {}
 _fedema_round: int    = 0
 
-# β”€β”€ FedConsensus-P global state β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FedConsensus-P global state ───────────────────────────────────────────────
 _fcp_trust: dict = {"T": None, "ids": None}
 
-# β”€β”€ Hardware monitoring β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── Hardware monitoring ───────────────────────────────────────────────────────
 
 class PeakRamMonitor:
     def __init__(self, interval: float = 0.5):
@@ -131,7 +155,58 @@ def initialize_fltrust_reference_model():
     pass
 
 
-# β”€β”€ Aggregation algorithms β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+def _get_w_prev_with_round0_fallback(strategy_label: str,
+                                     loaded_paths: list) -> tuple:
+    """
+    Επιστρέφει (w_prev, is_true_cold_start).
+
+    1. fog_model.keras (αποτέλεσμα προηγούμενου γύρου) — κανονική περίπτωση
+       από τον γύρο 2 και μετά.
+    2. fog_initial_model.keras (round-0 broadcast μοντέλο) — αν το cloud
+       στέλνει κοινά αρχικά βάρη πριν τον γύρο 1 (βλ. σημείωση παρακάτω).
+
+    ΣΗΜΕΙΩΣΗ ΑΡΧΙΤΕΚΤΟΝΙΚΗΣ: στο τρέχον σύστημα, το πρώτο cloud command
+    ('command': '0'/'1') ΔΕΝ περιέχει weights — κάθε edge αρχικοποιεί το
+    τοπικό μοντέλο του ανεξάρτητα με δικό του τυχαίο seed. Άρα δεν υπάρχει
+    πραγματικό κοινό σημείο αναφοράς στον γύρο 1, και ΔΕΝ γίνεται
+    προσπάθεια προσέγγισής του εδώ (μια τέτοια προσέγγιση θα μετρούσε
+    κυρίως τη διαφορά τυχαίων αρχικοποιήσεων, όχι πραγματικά gradients).
+    Αν το level 2 ενεργοποιηθεί κάποτε (το cloud στέλνει πραγματικό κοινό
+    broadcast πριν τον γύρο 1), θα λειτουργήσει αυτόματα.
+
+    is_true_cold_start=True όταν τίποτα από τα παραπάνω δεν είναι διαθέσιμο.
+    Ο καλών χειρίζεται αυτή την περίπτωση με fixed-trim TMean (ROUND1_FIXED_TRIM),
+    όχι FedAvg, ώστε ο γύρος 1 να μην καταρρεύσει σε επιθέσεις όπως Gaussian Noise.
+    """
+    fog_model_path = FogResourcesPaths.FOG_MODEL_FILE_PATH.value
+
+    if os.path.exists(fog_model_path):
+        try:
+            w_prev = _safe_load_model(fog_model_path).get_weights()
+            logger.info(f"{strategy_label}: loaded w_prev from fog model (previous round).")
+            return w_prev, False
+        except Exception as _e:
+            logger.warning(f"{strategy_label}: could not load fog model: {_e}")
+
+    if os.path.exists(FOG_INITIAL_MODEL_PATH):
+        try:
+            w_prev = _safe_load_model(FOG_INITIAL_MODEL_PATH).get_weights()
+            logger.info(f"{strategy_label}: round 1 — loaded w_prev from "
+                       f"round-0 broadcast reference ({FOG_INITIAL_MODEL_PATH}).")
+            return w_prev, False
+        except Exception as _e:
+            logger.warning(f"{strategy_label}: could not load initial reference model: {_e}")
+
+    logger.warning(
+        f"{strategy_label}: true cold start, no reference available — "
+        f"using fixed Trimmed Mean (trim=3, worst-case-fixed, NOT per-scenario "
+        f"oracle) for round 1 only, to avoid catastrophic FedAvg collapse "
+        f"under e.g. Gaussian Noise before any reference model exists."
+    )
+    return None, True
+
+
+# ── Aggregation algorithms ────────────────────────────────────────────────────
 
 def _fedavg(weights_list: list, scores: list) -> list:
     total = sum(scores)
@@ -147,7 +222,7 @@ def _fedavg(weights_list: list, scores: list) -> list:
 def _krum(weights_list: list, f: int) -> list:
     n = len(weights_list)
     if n <= 2 * f + 2:
-        logger.warning(f"Krum: n={n} <= 2f+2={2*f+2} β€” falling back to FedAvg.")
+        logger.warning(f"Krum: n={n} <= 2f+2={2*f+2} — falling back to FedAvg.")
         return _fedavg(weights_list, [1.0] * n)
 
     flat = [np.concatenate([w.flatten() for w in wl]) for wl in weights_list]
@@ -174,7 +249,7 @@ def _multi_krum(weights_list: list, f: int, m: int = 0) -> list:
     if m <= 0:
         m = max(1, n - f)
     if n <= 2 * f + 2:
-        logger.warning(f"Multi-Krum: n={n} <= 2f+2={2*f+2} β€” falling back to FedAvg.")
+        logger.warning(f"Multi-Krum: n={n} <= 2f+2={2*f+2} — falling back to FedAvg.")
         return _fedavg(weights_list, [1.0] * n)
 
     flat = [np.concatenate([w.flatten() for w in wl]) for wl in weights_list]
@@ -200,7 +275,7 @@ def _trimmed_mean(weights_list: list, f: int, trim_fraction: float = 0.0) -> lis
     n = len(weights_list)
     f_actual = max(0, int(trim_fraction * n)) if trim_fraction > 0.0 else f
     if 2 * f_actual >= n:
-        logger.warning(f"TrimmedMean: 2f={2*f_actual} >= n={n} β€” falling back to FedAvg.")
+        logger.warning(f"TrimmedMean: 2f={2*f_actual} >= n={n} — falling back to FedAvg.")
         return _fedavg(weights_list, [1.0] * n)
 
     result = []
@@ -213,7 +288,7 @@ def _trimmed_mean(weights_list: list, f: int, trim_fraction: float = 0.0) -> lis
     return result
 
 
-# β”€β”€ FLTrust core β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FLTrust core ──────────────────────────────────────────────────────────────
 
 def _load_fltrust_prev_weights() -> list | None:
     try:
@@ -246,7 +321,7 @@ def _fltrust(weights_list: list, w_prev: list, w_server: list, f: int = 0) -> li
     g0_norm   = np.linalg.norm(g0_flat)
 
     if g0_norm < 1e-10:
-        logger.warning("FLTrust: server gradient near-zero β€” fallback to FedAvg.")
+        logger.warning("FLTrust: server gradient near-zero — fallback to FedAvg.")
         return _fedavg(weights_list, [1.0] * n)
 
     trust_scores      = []
@@ -274,7 +349,7 @@ def _fltrust(weights_list: list, w_prev: list, w_server: list, f: int = 0) -> li
     total_ts = sum(trust_scores)
 
     if total_ts < 1e-10:
-        logger.warning("FLTrust: all trust scores zero β€” fallback to FedAvg.")
+        logger.warning("FLTrust: all trust scores zero — fallback to FedAvg.")
         return _fedavg(weights_list, [1.0] * n)
 
     logger.info(
@@ -293,7 +368,7 @@ def _fltrust(weights_list: list, w_prev: list, w_server: list, f: int = 0) -> li
     return aggregated
 
 
-# β”€β”€ FedEMA helpers β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FedEMA helpers ────────────────────────────────────────────────────────────
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     denom = np.linalg.norm(a) * np.linalg.norm(b)
@@ -365,7 +440,7 @@ def _ransac_inliers(node_ids: list, histories: dict) -> list:
             best_inliers = inliers
 
     if not best_inliers:
-        logger.warning("FedEMA RANSAC: no inliers found β€” returning all nodes.")
+        logger.warning("FedEMA RANSAC: no inliers found — returning all nodes.")
         return node_ids
 
     return best_inliers
@@ -402,7 +477,7 @@ def _fedema(weights_list: list, node_ids: list) -> list:
     if _fedema_round < FEDEMA_MIN_ROUNDS:
         best_idx   = int(np.argmax(mean_cos))
         best_id    = node_ids[best_idx]
-        logger.info(f"FedEMA: warmup round {_fedema_round} β€” selecting best cosine node: {best_id} (cos={mean_cos[best_idx]:.4f})")
+        logger.info(f"FedEMA: warmup round {_fedema_round} — selecting best cosine node: {best_id} (cos={mean_cos[best_idx]:.4f})")
         inlier_ids = [best_id]
     else:
         history_len = _fedema_round - 1
@@ -411,7 +486,7 @@ def _fedema(weights_list: list, node_ids: list) -> list:
             if len(_fedema_history.get(nid, [])) == history_len
         ]
         if len(valid_ids) < FEDEMA_SAMPLE_SIZE:
-            logger.warning("FedEMA: not enough valid nodes for RANSAC β€” using cosine clustering.")
+            logger.warning("FedEMA: not enough valid nodes for RANSAC — using cosine clustering.")
             inlier_ids = _cosine_cluster_inliers(node_ids, mean_cos)
         else:
             inlier_ids = _ransac_inliers(valid_ids, _fedema_history)
@@ -430,7 +505,7 @@ def _fedema(weights_list: list, node_ids: list) -> list:
     return result
 
 
-# β”€β”€ FedConsensus (original) β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FedConsensus (original) ───────────────────────────────────────────────────
 
 def _fedconsensus(weights_list: list, node_ids: list, w_prev: list) -> list:
     n = len(weights_list)
@@ -496,7 +571,7 @@ def _fedconsensus(weights_list: list, node_ids: list, w_prev: list) -> list:
     trusted_indices = [i for i, t in enumerate(trusted_mask) if t]
 
     if not trusted_indices:
-        logger.warning("FedConsensus: no trusted nodes found β€” FedAvg fallback.")
+        logger.warning("FedConsensus: no trusted nodes found — FedAvg fallback.")
         return _fedavg(weights_list, [1.0] * n)
 
     logger.info(
@@ -530,7 +605,7 @@ def _fedconsensus(weights_list: list, node_ids: list, w_prev: list) -> list:
     total_ts = sum(trust_scores)
 
     if total_ts < 1e-10:
-        logger.warning("FedConsensus: all trust scores zero β€” FedAvg fallback.")
+        logger.warning("FedConsensus: all trust scores zero — FedAvg fallback.")
         return _fedavg(weights_list, [1.0] * n)
 
     logger.info(f"FedConsensus: total_TS={total_ts:.4f} | active={len(trusted_indices)}/{n}")
@@ -546,20 +621,20 @@ def _fedconsensus(weights_list: list, node_ids: list, w_prev: list) -> list:
     return aggregated
 
 
-# β”€β”€ FedConsensus-SV (Soft Voting) β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FedConsensus-SV (Soft Voting) ─────────────────────────────────────────────
 
 def _fedconsensus_sv(weights_list: list, node_ids: list, w_prev: list) -> list:
     """
-    FedConsensus-SV: per-voter ΟƒΟ‡ΞµΟ„ΞΉΞΊΟ ΞΊΞ±Ο„ΟΟ†Ξ»ΞΉ + ΟƒΟ…Ξ½ΞµΟ‡Ξ® Ξ²Ξ¬ΟΞ·.
+    FedConsensus-SV: per-voter σχετικό κατώφλι + συνεχή βάρη.
 
-    Ξ”ΞΉΞ±Ο†ΞΏΟΞ­Ο‚ Ξ±Ο€Ο Ο„ΞΏ original:
-    1. Ξ ΞΊΟΞΌΞ²ΞΏΟ‚ j ΟΞ·Ο†Ξ―Ξ¶ΞµΞΉ Ο„ΞΏΞ½ i Ξ±Ξ½ T[j,i] > mean(T[j,:]) β€” ΟƒΟ‡ΞµΟ„ΞΉΞΊΟ,
-       ΟΟ‡ΞΉ global ΞΊΞ±Ο„ΟΟ†Ξ»ΞΉ. ΞΞ¬ΞΈΞµ ΞΊΟΞΌΞ²ΞΏΟ‚ ΞΊΟΞ―Ξ½ΞµΞΉ ΞΌΞµ Ξ²Ξ¬ΟƒΞ· Ο,Ο„ΞΉ Ξ²Ξ»Ξ­Ο€ΞµΞΉ ΞΏ Ξ―Ξ΄ΞΉΞΏΟ‚.
-    2. Ξ’Ξ¬ΟΞΏΟ‚ ΞΊΟΞΌΞ²ΞΏΟ… i = votes_iΒ² / Ξ£votesΒ² β€” ΟƒΟ…Ξ½ΞµΟ‡Ξ­Ο‚, ΟΟ‡ΞΉ Ξ΄Ο…Ξ±Ξ΄ΞΉΞΊΟ.
-       Ξ attacker Ο€Ξ±Ξ―ΟΞ½ΞµΞΉ Ξ»Ξ―Ξ³ΞµΟ‚ ΟΞ®Ο†ΞΏΟ…Ο‚ β†’ ΞΌΞΉΞΊΟΟ Ξ²Ξ¬ΟΞΏΟ‚ β†’ ΞΌΞΉΞΊΟΞ® ΞµΟ€ΞΉΟΟΞΏΞ®.
-    3. Trust matrix ΞΌΞµ Ξ•ΞΞ‘ matmul (vectorized) Ξ±Ξ½Ο„Ξ― Ξ³ΞΉΞ± per-pair loops.
+    Διαφορές από το original:
+    1. Ο κόμβος j ψηφίζει τον i αν T[j,i] > mean(T[j,:]) — σχετικό,
+       όχι global κατώφλι. Κάθε κόμβος κρίνει με βάση ό,τι βλέπει ο ίδιος.
+    2. Βάρος κόμβου i = votes_i² / Σvotes² — συνεχές, όχι δυαδικό.
+       Ο attacker παίρνει λίγες ψήφους → μικρό βάρος → μικρή επιρροή.
+    3. Trust matrix με ΕΝΑ matmul (vectorized) αντί για per-pair loops.
 
-    Drop-in Ξ±Ξ½Ο„ΞΉΞΊΞ±Ο„Ξ¬ΟƒΟ„Ξ±ΟƒΞ·: Ξ―Ξ΄ΞΉΞ± ΞµΞ―ΟƒΞΏΞ΄ΞΏΟ‚/Ξ­ΞΎΞΏΞ΄ΞΏΟ‚ ΞΌΞµ _fedconsensus.
+    Drop-in αντικατάσταση: ίδια είσοδος/έξοδος με _fedconsensus.
     """
     n = len(weights_list)
 
@@ -595,7 +670,7 @@ def _fedconsensus_sv(weights_list: list, node_ids: list, w_prev: list) -> list:
 
     w = votes ** 2
     if w.sum() < 1e-10:
-        logger.warning("FedConsensus-SV: zero votes everywhere β€” FedAvg fallback.")
+        logger.warning("FedConsensus-SV: zero votes everywhere — FedAvg fallback.")
         return _fedavg(weights_list, [1.0] * n)
     w = w / w.sum()
 
@@ -610,7 +685,7 @@ def _fedconsensus_sv(weights_list: list, node_ids: list, w_prev: list) -> list:
             if norms[k] > 1e-10:
                 scale = median_norm / norms[k]
                 weighted_grad += w[k] * gradients[k][layer_idx] * scale
-            # norms[k] β‰ 0: contributes 0 (already zeroed)
+            # norms[k] ≈ 0: contributes 0 (already zeroed)
         aggregated.append(w_prev[layer_idx] + weighted_grad)
 
     logger.info(
@@ -620,10 +695,10 @@ def _fedconsensus_sv(weights_list: list, node_ids: list, w_prev: list) -> list:
     return aggregated
 
 
-# β”€β”€ FedConsensus-P (Personalized) β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── FedConsensus-P (Personalized) ─────────────────────────────────────────────
 
 def _load_fcp_prev_weights(node_id: str, fallback: list) -> list:
-    """Ξ¦ΞΏΟΟ„ΟΞ½ΞµΞΉ Ο„ΞΏ Ο€ΟΞΏΟƒΟ‰Ο€ΞΉΞΊΟ ΞΌΞΏΞ½Ο„Ξ­Ξ»ΞΏ Ο„ΞΏΟ… node_id, Ξ±Ξ»Ξ»ΞΉΟΟ‚ ΞµΟ€ΞΉΟƒΟ„ΟΞ­Ο†ΞµΞΉ Ο„ΞΏ fallback."""
+    """Φορτώνει το προσωπικό μοντέλο του node_id, αλλιώς επιστρέφει το fallback."""
     path = os.path.join(FCP_MODELS_DIR, f"fcp_model_{node_id}.npz")
     try:
         if os.path.exists(path):
@@ -647,30 +722,30 @@ def _fedconsensus_p(weights_list: list, node_ids: list, w_global_prev: list) -> 
     """
     FedConsensus-P (Personalized).
 
-    ΞΞ¬ΞΈΞµ ΞΊΟΞΌΞ²ΞΏΟ‚ Ξ΄ΞΉΞ±Ο„Ξ·ΟΞµΞ― Ο€ΟΞΏΟƒΟ‰Ο€ΞΉΞΊΟ ΞΌΞΏΞ½Ο„Ξ­Ξ»ΞΏ (Ξ±Ο€ΞΏΞΈΞ·ΞΊΞµΟ…ΞΌΞ­Ξ½ΞΏ ΟƒΟ„ΞΏ FCP_MODELS_DIR).
-    Aggregation: ΞΊΞ¬ΞΈΞµ i ΞµΞ½Ξ·ΞΌΞµΟΟΞ½ΞµΟ„Ξ±ΞΉ ΞΌΞµ weighted sum ΟΞ»Ο‰Ξ½ Ο„Ο‰Ξ½ gradients,
-    ΞΌΞµ Ξ²Ξ¬ΟΞ· Ξ±Ο€Ο EMA trust matrix (trust[i,j]Β²).
+    Κάθε κόμβος διατηρεί προσωπικό μοντέλο (αποθηκευμένο στο FCP_MODELS_DIR).
+    Aggregation: κάθε i ενημερώνεται με weighted sum όλων των gradients,
+    με βάρη από EMA trust matrix (trust[i,j]²).
 
-    Ξ£Ξ—ΞΞ‘ΞΞ¤Ξ™ΞΞ Ξ³ΞΉΞ± integration:
-    - Ξ•Ο€ΞΉΟƒΟ„ΟΞ­Ο†ΞµΞΉ Ξ•ΞΞ‘ global aggregated weights list (ΞΏ ΞΊΟΞΌΞ²ΞΏΟ‚ ΞΌΞµ Ο„ΞΏ Ο…ΟΞ·Ξ»ΟΟ„ΞµΟΞΏ
-      trust score Ο„Ξ± "ΞµΞΊΟ€ΟΞΏΟƒΟ‰Ο€ΞµΞ―") Ξ³ΞΉΞ± Ξ½Ξ± ΟƒΟ‰ΞΈΞµΞ― ΟƒΟ„ΞΏ FOG_MODEL_FILE_PATH Ο‰Ο‚
-      ΟƒΟ…ΞΌΞ²Ξ±Ο„ΟΟ„Ξ·Ο„Ξ± ΞΌΞµ Ο„ΞΏ Ο…Ο€Ξ¬ΟΟ‡ΞΏΞ½ pipeline β€” Ξ±Ξ»Ξ»Ξ¬ Ο„Ξ± per-node ΞΌΞΏΞ½Ο„Ξ­Ξ»Ξ±
-      Ξ±Ο€ΞΏΞΈΞ·ΞΊΞµΟΞΏΞ½Ο„Ξ±ΞΉ ΞµΟƒΟ‰Ο„ΞµΟΞΉΞΊΞ¬ ΟƒΟ„ΞΏ FCP_MODELS_DIR.
-    - Ξ¤ΞΏ routing (Ο€ΞΏΞΉΞΏΟ‚ edge Ο€Ξ±Ξ―ΟΞ½ΞµΞΉ Ο€ΞΏΞΉΞΏ ΞΌΞΏΞ½Ο„Ξ­Ξ»ΞΏ) Ξ³Ξ―Ξ½ΞµΟ„Ξ±ΞΉ Ξ±Ο…Ο„ΟΞΌΞ±Ο„Ξ±:
-      Ο„ΞΏ ΞΊΞ¬ΞΈΞµ edge ΞΊΞΏΞΉΟ„Ξ¬ΞµΞΉ Ο„ΞΏ fcp_model_{node_id}.npz ΞΊΞ±Ο„Ξ¬ Ο„Ξ·Ξ½ Ξ±ΟΟ‡ΞΉΞΊΞΏΟ€ΞΏΞ―Ξ·ΟƒΞ·.
-    - Ξ‘Ξ½ Ξ΄ΞµΞ½ Ο…Ο€Ξ¬ΟΟ‡ΞµΞΉ Ξ±Ο€ΞΏΞΈΞ·ΞΊΞµΟ…ΞΌΞ­Ξ½ΞΏ ΞΌΞΏΞ½Ο„Ξ­Ξ»ΞΏ Ξ³ΞΉΞ± ΞΊΟΞΌΞ²ΞΏ (round 1), Ο‡ΟΞ·ΟƒΞΉΞΌΞΏΟ€ΞΏΞΉΞµΞ―
-      Ο„ΞΏ global w_prev Ο‰Ο‚ Ξ±ΟΟ‡ΞΉΞΊΞ® Ο„ΞΉΞΌΞ®.
+    ΣΗΜΑΝΤΙΚΟ για integration:
+    - Επιστρέφει ΕΝΑ global aggregated weights list (ο κόμβος με το υψηλότερο
+      trust score τα "εκπροσωπεί") για να σωθεί στο FOG_MODEL_FILE_PATH ως
+      συμβατότητα με το υπάρχον pipeline — αλλά τα per-node μοντέλα
+      αποθηκεύονται εσωτερικά στο FCP_MODELS_DIR.
+    - Το routing (ποιος edge παίρνει ποιο μοντέλο) γίνεται αυτόματα:
+      το κάθε edge κοιτάει το fcp_model_{node_id}.npz κατά την αρχικοποίηση.
+    - Αν δεν υπάρχει αποθηκευμένο μοντέλο για κόμβο (round 1), χρησιμοποιεί
+      το global w_prev ως αρχική τιμή.
     """
     global _fcp_trust
     n = len(weights_list)
 
-    # Ο†ΟΟΟ„Ο‰ΟƒΞµ per-node w_prev (round 1: fallback ΟƒΟ„ΞΏ global)
+    # φόρτωσε per-node w_prev (round 1: fallback στο global)
     w_prev_per_node = {
         nid: _load_fcp_prev_weights(nid, w_global_prev)
         for nid in node_ids
     }
 
-    # gradients Ο‰Ο‚ Ο€ΟΞΏΟ‚ Ο„ΞΏ Ο€ΟΞΏΟƒΟ‰Ο€ΞΉΞΊΟ w_prev Ο„ΞΏΟ… ΞΊΞ¬ΞΈΞµ ΞΊΟΞΌΞ²ΞΏΟ…
+    # gradients ως προς το προσωπικό w_prev του κάθε κόμβου
     gradients, flat_grads = [], []
     for w_client, nid in zip(weights_list, node_ids):
         wp = w_prev_per_node[nid]
@@ -686,7 +761,7 @@ def _fedconsensus_p(weights_list: list, node_ids: list, w_global_prev: list) -> 
     if bad.any():
         logger.warning(
             f"FedConsensus-P: non-finite updates from "
-            f"{[node_ids[i] for i in np.where(bad)[0]]} β€” zeroed."
+            f"{[node_ids[i] for i in np.where(bad)[0]]} — zeroed."
         )
         F[bad] = 0.0
         norms[bad] = 0.0
@@ -703,10 +778,10 @@ def _fedconsensus_p(weights_list: list, node_ids: list, w_global_prev: list) -> 
     S = np.clip(Fn @ Fn.T, 0.0, None)
     np.fill_diagonal(S, 1.0)   # self-trust = 1
 
-    # EMA trust matrix (reset Ξ±Ξ½ Ξ±Ξ»Ξ»Ξ¬ΞΎΞΏΟ…Ξ½ ΞΏΞΉ ΟƒΟ…ΞΌΞΌΞµΟ„Ξ­Ο‡ΞΏΞ½Ο„ΞµΟ‚)
+    # EMA trust matrix (reset αν αλλάξουν οι συμμετέχοντες)
     if _fcp_trust["T"] is None or _fcp_trust["ids"] != list(node_ids):
         if _fcp_trust["T"] is not None:
-            logger.warning("FedConsensus-P: participant set changed β€” resetting EMA trust.")
+            logger.warning("FedConsensus-P: participant set changed — resetting EMA trust.")
         _fcp_trust["T"] = np.eye(n)
         _fcp_trust["ids"] = list(node_ids)
 
@@ -737,14 +812,14 @@ def _fedconsensus_p(weights_list: list, node_ids: list, w_global_prev: list) -> 
 
     logger.info(f"FedConsensus-P: updated {n} personal models | median_norm={median_norm:.6f}")
 
-    # ΞµΟ€ΞΉΟƒΟ„ΟΞ­Ο†ΞµΞΉ Ο„ΞΏ ΞΌΞΏΞ½Ο„Ξ­Ξ»ΞΏ Ο„ΞΏΟ… most-trusted ΞΊΟΞΌΞ²ΞΏΟ… Ο‰Ο‚ global (Ξ³ΞΉΞ± pipeline compatibility)
+    # επιστρέφει το μοντέλο του most-trusted κόμβου ως global (για pipeline compatibility)
     best_idx = int(np.argmax([T[:, i].mean() for i in range(n)]))
     best_nid = node_ids[best_idx]
     logger.info(f"FedConsensus-P: global representative = {best_nid}")
     return results[best_nid]
 
 
-# β”€β”€ Main aggregation function β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+# ── Main aggregation function ─────────────────────────────────────────────────
 
 def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1.0,
                                    round_start_time: float = None):
@@ -774,7 +849,7 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
 
     if not weights_list:
         ram_monitor.stop()
-        logger.error("No edge models loaded β€” cannot aggregate.")
+        logger.error("No edge models loaded — cannot aggregate.")
         return None
 
     n = len(weights_list)
@@ -799,7 +874,7 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
     ram_before_agg = psutil.Process(os.getpid()).memory_info().rss / (1024 ** 2)
     t_agg_start = time.perf_counter()
 
-    # β”€β”€ Aggregation dispatch β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€β”€
+    # ── Aggregation dispatch ──────────────────────────────────────────────────
     if AGGREGATION_STRATEGY == 'krum':
         aggregated_weights = _krum(weights_list, f)
 
@@ -824,24 +899,24 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
                 _save_fltrust_prev_weights(w_prev)
                 logger.info(f"FLTrust: loaded w_prev from fog model (round1={_is_first_round})")
             except Exception as _e:
-                logger.warning(f"FLTrust: could not load fog model: {_e} β€” trying saved prev weights.")
+                logger.warning(f"FLTrust: could not load fog model: {_e} — trying saved prev weights.")
                 w_prev = _load_fltrust_prev_weights()
         else:
-            logger.warning("FLTrust: fog model not found β€” trying saved prev weights.")
+            logger.warning("FLTrust: fog model not found — trying saved prev weights.")
             w_prev = _load_fltrust_prev_weights()
 
         if _is_first_round:
             try:
                 open(FLTRUST_ROUND_FLAG_PATH, 'w').close()
-                logger.info(f"FLTrust: Round 1 β€” created round flag at {FLTRUST_ROUND_FLAG_PATH}")
+                logger.info(f"FLTrust: Round 1 — created round flag at {FLTRUST_ROUND_FLAG_PATH}")
             except Exception as _e:
                 logger.warning(f"FLTrust: could not create round flag: {_e}")
 
         if w_prev is None:
-            logger.warning("FLTrust: no w_prev available β€” FedAvg fallback.")
+            logger.warning("FLTrust: no w_prev available — FedAvg fallback.")
             aggregated_weights = _fedavg(weights_list, inv_mse_scores)
         elif FLTRUST_SERVER_NODE not in node_ids:
-            logger.warning(f"FLTrust: server node '{FLTRUST_SERVER_NODE}' not found β€” FedAvg fallback.")
+            logger.warning(f"FLTrust: server node '{FLTRUST_SERVER_NODE}' not found — FedAvg fallback.")
             aggregated_weights = _fedavg(weights_list, inv_mse_scores)
         else:
             server_idx    = node_ids.index(FLTRUST_SERVER_NODE)
@@ -853,93 +928,61 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
         fog_model_path  = FogResourcesPaths.FOG_MODEL_FILE_PATH.value
         _is_first_round = not os.path.exists(FLTRUST_ROUND_FLAG_PATH)
 
-        if _is_first_round:
-            logger.info("FLTrust2: round 1 cold start -- using trimmed-mean fallback.")
-            aggregated_weights = _trimmed_mean(weights_list, f, trim_fraction=TMEAN_TRIM_FRACTION)
-            try:
-                open(FLTRUST_ROUND_FLAG_PATH, 'w').close()
-                logger.info(f"FLTrust2: Round 1 -- created round flag at {FLTRUST_ROUND_FLAG_PATH}")
-            except Exception as _e:
-                logger.warning(f"FLTrust2: could not create round flag: {_e}")
-        else:
-            w_prev = None
-            if os.path.exists(fog_model_path):
-                try:
-                    w_prev = _safe_load_model(fog_model_path).get_weights()
-                    _save_fltrust_prev_weights(w_prev)
-                    logger.info(f"FLTrust2: loaded w_prev from fog model (round1={_is_first_round})")
-                except Exception as _e:
-                    logger.warning(f"FLTrust2: could not load fog model: {_e} -- trying saved prev weights.")
-                    w_prev = _load_fltrust_prev_weights()
-            else:
-                logger.warning("FLTrust2: fog model not found -- trying saved prev weights.")
-                w_prev = _load_fltrust_prev_weights()
-
-            if w_prev is None:
-                logger.warning("FLTrust2: no w_prev available -- FedAvg fallback.")
-                aggregated_weights = _fedavg(weights_list, inv_mse_scores)
-            else:
-                logger.info("FLTrust2: training independent server model on fog...")
-                w_server = fltrust2_train_server(fog_model_path)
-
-                if w_server is None:
-                    logger.warning("FLTrust2: server training failed -- FedAvg fallback.")
-                    aggregated_weights = _fedavg(weights_list, inv_mse_scores)
-                else:
-                    logger.info(
-                        f"FLTrust2: independent server ready | n={n} | f={f} | "
-                        f"round1={_is_first_round}"
-                    )
-                    aggregated_weights = _fltrust(weights_list, w_prev, w_server, f=f)
-
-    elif AGGREGATION_STRATEGY == 'fedconsensus':
-        fog_model_path = FogResourcesPaths.FOG_MODEL_FILE_PATH.value
-        w_prev_fc = None
-
+        w_prev = None
         if os.path.exists(fog_model_path):
             try:
-                w_prev_fc = _safe_load_model(fog_model_path).get_weights()
-                logger.info("FedConsensus: loaded w_prev from fog model.")
+                w_prev = _safe_load_model(fog_model_path).get_weights()
+                _save_fltrust_prev_weights(w_prev)
+                logger.info(f"FLTrust2: loaded w_prev from fog model (round1={_is_first_round})")
             except Exception as _e:
-                logger.warning(f"FedConsensus: could not load fog model: {_e}")
+                logger.warning(f"FLTrust2: could not load fog model: {_e} — trying saved prev weights.")
+                w_prev = _load_fltrust_prev_weights()
+        else:
+            logger.warning("FLTrust2: fog model not found — trying saved prev weights.")
+            w_prev = _load_fltrust_prev_weights()
 
-        if w_prev_fc is None:
-            logger.warning("FedConsensus: no w_prev available β€” FedAvg fallback.")
+        if _is_first_round:
+            try:
+                open(FLTRUST_ROUND_FLAG_PATH, 'w').close()
+                logger.info(f"FLTrust2: Round 1 — created round flag at {FLTRUST_ROUND_FLAG_PATH}")
+            except Exception as _e:
+                logger.warning(f"FLTrust2: could not create round flag: {_e}")
+
+        if w_prev is None:
+            logger.warning("FLTrust2: no w_prev available — FedAvg fallback.")
             aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+        else:
+            logger.info("FLTrust2: training independent server model on fog...")
+            w_server = fltrust2_train_server(fog_model_path)
+
+            if w_server is None:
+                logger.warning("FLTrust2: server training failed — FedAvg fallback.")
+                aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+            else:
+                logger.info(
+                    f"FLTrust2: independent server ready | n={n} | f={f} | "
+                    f"round1={_is_first_round}"
+                )
+                aggregated_weights = _fltrust(weights_list, w_prev, w_server, f=f)
+
+    elif AGGREGATION_STRATEGY == 'fedconsensus':
+        w_prev_fc, _cold = _get_w_prev_with_round0_fallback("FedConsensus", loaded_paths)
+        if w_prev_fc is None:
+            aggregated_weights = _trimmed_mean(weights_list, ROUND1_FIXED_TRIM)
         else:
             aggregated_weights = _fedconsensus(weights_list, node_ids, w_prev_fc)
 
     elif AGGREGATION_STRATEGY == 'fedconsensus_sv':
-        fog_model_path = FogResourcesPaths.FOG_MODEL_FILE_PATH.value
-        w_prev_fc = None
-
-        if os.path.exists(fog_model_path):
-            try:
-                w_prev_fc = _safe_load_model(fog_model_path).get_weights()
-                logger.info("FedConsensus-SV: loaded w_prev from fog model.")
-            except Exception as _e:
-                logger.warning(f"FedConsensus-SV: could not load fog model: {_e}")
-
+        w_prev_fc, _cold = _get_w_prev_with_round0_fallback("FedConsensus-SV", loaded_paths)
         if w_prev_fc is None:
-            logger.warning("FedConsensus-SV: no w_prev available β€” FedAvg fallback.")
-            aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+            aggregated_weights = _trimmed_mean(weights_list, ROUND1_FIXED_TRIM)
         else:
             aggregated_weights = _fedconsensus_sv(weights_list, node_ids, w_prev_fc)
 
     elif AGGREGATION_STRATEGY == 'fedconsensus_p':
-        fog_model_path = FogResourcesPaths.FOG_MODEL_FILE_PATH.value
-        w_prev_fc = None
-
-        if os.path.exists(fog_model_path):
-            try:
-                w_prev_fc = _safe_load_model(fog_model_path).get_weights()
-                logger.info("FedConsensus-P: loaded global w_prev from fog model.")
-            except Exception as _e:
-                logger.warning(f"FedConsensus-P: could not load fog model: {_e}")
-
+        w_prev_fc, _cold = _get_w_prev_with_round0_fallback("FedConsensus-P", loaded_paths)
         if w_prev_fc is None:
-            logger.warning("FedConsensus-P: no w_prev available β€” FedAvg fallback.")
-            aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+            aggregated_weights = _trimmed_mean(weights_list, ROUND1_FIXED_TRIM)
         else:
             aggregated_weights = _fedconsensus_p(weights_list, node_ids, w_prev_fc)
 
@@ -990,3 +1033,4 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
     )
 
     return template_model
+
