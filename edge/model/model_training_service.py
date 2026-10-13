@@ -16,6 +16,7 @@ from edge.model.data_selection import filter_data_by_interval_date
 from edge.communication.edge_resources_paths import EdgeResourcesPaths
 from shared.logging_config import logger
 from shared.utils import required_columns
+from shared import normalization as norm
 
 # ── FedProx configuration ────────────────────────────────────────────────────
 FL_ALGORITHM = os.getenv('FL_ALGORITHM', 'fedavg').lower()
@@ -49,6 +50,23 @@ def compute_metrics(y_true, y_pred):
         "huber": float(tf.keras.losses.Huber()(y_true, y_pred).numpy()),
         "msle": float(np.mean((np.log1p(y_true) - np.log1p(y_pred)) ** 2)),
     }
+
+
+def compute_metrics_pair(y_true_n, y_pred_n, norm_stats):
+    """Metrics σε kWh (για αναφορά/σύγκριση) + στον κανονικοποιημένο χώρο."""
+    if len(y_true_n) == 0:
+        return {}, {}
+    y_true_kwh = norm.inverse_target(y_true_n, norm_stats)
+    y_pred_kwh = norm.inverse_target(y_pred_n, norm_stats)
+    kwh = compute_metrics(y_true_kwh, y_pred_kwh)
+    if norm_stats is None:
+        return kwh, {}
+    normed = {
+        "mse": float(mean_squared_error(y_true_n, y_pred_n)),
+        "mae": float(mean_absolute_error(y_true_n, y_pred_n)),
+        "r2": float(r2_score(y_true_n, y_pred_n)),
+    }
+    return kwh, normed
 
 
 # =========================
@@ -241,6 +259,25 @@ def train_local_edge_model(
     if not fallback_eval:
         preprocess_data(evaluation_data_path, "timestamp", "consumption_kwh")
 
+    # -------- Per-house normalization (stats ΜΟΝΟ από training split) --------
+    norm_stats = None
+    if norm.enabled():
+        norm_stats = norm.fit_stats(train_df)
+        norm.transform_csv(training_data_path, norm_stats)
+        if not fallback_eval:
+            norm.transform_csv(evaluation_data_path, norm_stats)
+        norm.save_stats(
+            norm_stats,
+            os.path.join(EdgeResourcesPaths.MODELS_FOLDER_PATH.value, "norm_stats.json"),
+        )
+        train_df = pd.read_csv(training_data_path)
+        logger.info(
+            f"Normalization: per-house | mu={norm_stats['mu']:.4f} kWh | "
+            f"sd={norm_stats['sd']:.4f} kWh"
+        )
+    else:
+        logger.info("Normalization: disabled (NORMALIZATION=none)")
+
     eval_df = pd.read_csv(evaluation_data_path)
 
     # -------- Features --------
@@ -283,11 +320,14 @@ def train_local_edge_model(
         y_true_before.append(y_batch.numpy())
         y_pred_before.append(preds.flatten())
 
-    before_metrics = compute_metrics(
+    before_metrics, before_norm = compute_metrics_pair(
         np.concatenate(y_true_before) if y_true_before else np.array([]),
         np.concatenate(y_pred_before) if y_pred_before else np.array([]),
+        norm_stats,
     )
-    logger.info(f"Metrics before training: {before_metrics}")
+    logger.info(f"Metrics before training (kWh): {before_metrics}")
+    if before_norm:
+        logger.info(f"Metrics before training (normalized): {before_norm}")
 
     # -------- Configure model (FedAvg ή FedProx) --------
     if FL_ALGORITHM == 'fedprox':
@@ -333,11 +373,14 @@ def train_local_edge_model(
         y_true_after.append(y_batch.numpy())
         y_pred_after.append(preds.flatten())
 
-    after_metrics = compute_metrics(
+    after_metrics, after_norm = compute_metrics_pair(
         np.concatenate(y_true_after) if y_true_after else np.array([]),
         np.concatenate(y_pred_after) if y_pred_after else np.array([]),
+        norm_stats,
     )
-    logger.info(f"Metrics after training ({FL_ALGORITHM.upper()}): {after_metrics}")
+    logger.info(f"Metrics after training ({FL_ALGORITHM.upper()}, kWh): {after_metrics}")
+    if after_norm:
+        logger.info(f"Metrics after training ({FL_ALGORITHM.upper()}, normalized): {after_norm}")
 
     # -------- Save model --------
     Path(EdgeResourcesPaths.MODELS_FOLDER_PATH.value).mkdir(parents=True, exist_ok=True)
@@ -353,6 +396,10 @@ def train_local_edge_model(
         "fedprox_mu": FEDPROX_MU if FL_ALGORITHM == 'fedprox' else None,
         "before_training": before_metrics,
         "after_training": after_metrics,
+        "before_training_norm": before_norm,
+        "after_training_norm": after_norm,
+        "norm_stats": norm_stats,
         "training_time_secs": training_time_secs,
         "peak_ram_mb": peak_ram_mb,
     }
+

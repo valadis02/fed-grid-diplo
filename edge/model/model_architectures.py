@@ -1,3 +1,5 @@
+import os
+
 import tensorflow as tf
 from shared.utils import required_columns
 from shared.logging_config import logger
@@ -8,7 +10,15 @@ from shared.logging_config import logger
 # ~48K παράμετροι — μειωμένη από την αρχική Dense(150)->Dense(75) (~120K)
 # για ταχύτερα πειράματα σε RPi hardware. Ενημέρωσε το paper's Section V
 # (Model paragraph) ώστε να αναφέρει ~48K αντί για ~119K παραμέτρους.
+#
+# ΚΟΙΝΗ ΑΡΧΙΚΟΠΟΙΗΣΗ (MODEL_INIT_SEED):
+# Όλα τα edges χτίζουν το αρχικό μοντέλο με τους ΙΔΙΟΥΣ seeded initializers,
+# ώστε στον γύρο 1 να ξεκινούν από το ίδιο w0 (προϋπόθεση του FedAvg).
+# Χωρίς αυτό, ο μέσος όρος ανεξάρτητα αρχικοποιημένων MLP ακυρώνει τα
+# hidden features και το δίκτυο καταρρέει σε σταθερή πρόβλεψη (dead ReLUs).
 # ---------------------------------------------------------------
+
+MODEL_INIT_SEED = int(os.getenv("MODEL_INIT_SEED", "42"))
 
 _KNOWN_LABELS = {
     'conv1d_lstm_small',
@@ -29,6 +39,10 @@ def _compile(model: tf.keras.Model) -> tf.keras.Model:
     )
     return model
 
+def _kernel_init(layer_idx: int):
+    # Διαφορετικό (αλλά σταθερό) seed ανά στρώση, ίδιο σε όλα τα edges.
+    return tf.keras.initializers.GlorotUniform(seed=MODEL_INIT_SEED + layer_idx)
+
 def create_model(model_label_or_seq_len=48,
                  mask_value: int = -1) -> tf.keras.Model:
     """
@@ -37,6 +51,7 @@ def create_model(model_label_or_seq_len=48,
       - string label → αγνοείται, χτίζει πάντα MLP baseline
       - int sequence_length (π.χ. 48) → χρησιμοποιείται ως sequence length
     ~48K παράμετροι: Flatten + Dense(64) + Dense(32) + Dense(1).
+    Βάρη αρχικοποιούνται ντετερμινιστικά από MODEL_INIT_SEED (κοινό w0).
     """
     if isinstance(model_label_or_seq_len, str):
         if model_label_or_seq_len not in _KNOWN_LABELS:
@@ -52,17 +67,21 @@ def create_model(model_label_or_seq_len=48,
         shape=(sequence_length, _num_features()), dtype=tf.float32
     )
     x = tf.keras.layers.Flatten()(inputs)
-    x = tf.keras.layers.Dense(64, activation='relu')(x)
+    x = tf.keras.layers.Dense(64, activation='relu', kernel_initializer=_kernel_init(0))(x)
     x = tf.keras.layers.Dropout(0.2)(x)
-    x = tf.keras.layers.Dense(32, activation='relu')(x)
+    x = tf.keras.layers.Dense(32, activation='relu', kernel_initializer=_kernel_init(1))(x)
     x = tf.keras.layers.Dropout(0.2)(x)
-    outputs = tf.keras.layers.Dense(1)(x)
+    outputs = tf.keras.layers.Dense(1, kernel_initializer=_kernel_init(2))(x)
 
     model = tf.keras.Model(inputs, outputs, name='mlp_baseline')
+
+    # Fingerprint για επιβεβαίωση ότι όλα τα edges έχουν το ίδιο w0.
+    w0_sum = float(sum(float(tf.reduce_sum(w)) for w in model.weights))
     logger.info(
         f"[mlp_baseline] δημιουργήθηκε | "
         f"params: {model.count_params():,} | "
-        f"input: ({sequence_length}, {_num_features()})"
+        f"input: ({sequence_length}, {_num_features()}) | "
+        f"init_seed={MODEL_INIT_SEED} | w0_checksum={w0_sum:.6f}"
     )
     return _compile(model)
 
@@ -71,3 +90,4 @@ def simple_lstm_model(sequence_length: int = 48,
                       mask_value: int = -1) -> tf.keras.Model:
     """Alias για create_model() — διατηρείται για συμβατότητα."""
     return create_model(sequence_length, mask_value)
+

@@ -15,6 +15,10 @@ AGGREGATION_STRATEGY  = os.getenv('AGGREGATION_STRATEGY', 'fedavg').lower()
 NUM_BYZANTINE         = int(os.getenv('KRUM_NUM_BYZANTINE', '0'))
 MULTI_KRUM_M          = int(os.getenv('MULTI_KRUM_M', '0'))
 TMEAN_TRIM_FRACTION   = float(os.getenv('TMEAN_TRIM_FRACTION', '0.0'))
+# FedAvg weighting: 'uniform' (κλασικό FedAvg — όλα τα edges έχουν ίδιο πλήθος
+# δειγμάτων) ή 'inv_mse' (παλιά συμπεριφορά: βάρος 1/MSE). Το inv_mse ευνοεί
+# συστηματικά σπίτια μικρής κατανάλωσης όταν τα δεδομένα δεν είναι κανονικοποιημένα.
+FEDAVG_WEIGHTING      = os.getenv('FEDAVG_WEIGHTING', 'uniform').lower()
 
 # ── FLTrust Parameters ────────────────────────────────────────────────────────
 FLTRUST_ROOT_DATA_PATH    = os.getenv('FLTRUST_ROOT_DATA_PATH', '')
@@ -75,7 +79,7 @@ FOG_INITIAL_MODEL_PATH = os.getenv(
 
 logger.info(
     f"Aggregation strategy: {AGGREGATION_STRATEGY.upper()} | "
-    f"num_byzantine={NUM_BYZANTINE}"
+    f"num_byzantine={NUM_BYZANTINE} | fedavg_weighting={FEDAVG_WEIGHTING}"
 )
 
 # ── FedEMA global state ───────────────────────────────────────────────────────
@@ -854,7 +858,10 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
 
     n = len(weights_list)
     f = NUM_BYZANTINE
-    inv_mse_scores = [1.0 / (m + 1e-8) for m in mse_scores]
+    if FEDAVG_WEIGHTING == 'inv_mse':
+        fedavg_scores = [1.0 / (m + 1e-8) for m in mse_scores]
+    else:
+        fedavg_scores = [1.0] * n
 
     cpu_usage_samples = []
     stop_cpu_mon = threading.Event()
@@ -914,10 +921,10 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
 
         if w_prev is None:
             logger.warning("FLTrust: no w_prev available — FedAvg fallback.")
-            aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+            aggregated_weights = _fedavg(weights_list, fedavg_scores)
         elif FLTRUST_SERVER_NODE not in node_ids:
             logger.warning(f"FLTrust: server node '{FLTRUST_SERVER_NODE}' not found — FedAvg fallback.")
-            aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+            aggregated_weights = _fedavg(weights_list, fedavg_scores)
         else:
             server_idx    = node_ids.index(FLTRUST_SERVER_NODE)
             w_server_node = weights_list[server_idx]
@@ -950,14 +957,14 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
 
         if w_prev is None:
             logger.warning("FLTrust2: no w_prev available — FedAvg fallback.")
-            aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+            aggregated_weights = _fedavg(weights_list, fedavg_scores)
         else:
             logger.info("FLTrust2: training independent server model on fog...")
             w_server = fltrust2_train_server(fog_model_path)
 
             if w_server is None:
                 logger.warning("FLTrust2: server training failed — FedAvg fallback.")
-                aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+                aggregated_weights = _fedavg(weights_list, fedavg_scores)
             else:
                 logger.info(
                     f"FLTrust2: independent server ready | n={n} | f={f} | "
@@ -987,7 +994,7 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
             aggregated_weights = _fedconsensus_p(weights_list, node_ids, w_prev_fc)
 
     else:
-        aggregated_weights = _fedavg(weights_list, inv_mse_scores)
+        aggregated_weights = _fedavg(weights_list, fedavg_scores)
 
     aggregation_time_s = round(time.perf_counter() - t_agg_start, 4)
 

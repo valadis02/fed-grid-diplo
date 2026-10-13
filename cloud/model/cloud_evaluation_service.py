@@ -17,16 +17,20 @@ from tensorflow.keras.preprocessing import timeseries_dataset_from_array
 
 from cloud.communication.cloud_resources_paths import CloudResourcesPaths
 from shared.logging_config import logger
+from shared import normalization as norm
 
 # ── Configuration ─────────────────────────────────────────────
 SEQUENCE_LENGTH = int(os.getenv('SEQUENCE_LENGTH', 48))
-BATCH_SIZE      = 32
+BATCH_SIZE      = 256
 WINDOWS         = [3, 6, 12, 24]
-POINTS_PER_DAY  = int(os.getenv('POINTS_PER_DAY', 48))
 
-# Ημέρες test set — για LCL (29 μέρες): 20-29
-TEST_DAYS_START = int(os.getenv('TEST_DAYS_START', 20))
-TEST_DAYS_END   = int(os.getenv('TEST_DAYS_END',   29))
+# Ίδιο train/eval παράθυρο με τα edges (βλ. model_training_service).
+# Διόρθωση: παλιότερα το test set ήταν οι γραμμές 20*48..29*48 (λογική του
+# 1-μηνιαίου dataset) — με 12 μήνες αυτές πέφτουν ΜΕΣΑ στο training period,
+# και αξιολογούνταν μόνο τα house_1..10.
+TRAINING_DATE = os.getenv('TRAINING_DATE', '2012-02-01')
+TRAIN_DAYS    = int(os.getenv('TRAIN_DAYS', 274))
+EVAL_DAYS     = int(os.getenv('EVAL_DAYS', 92))
 
 FEATURE_COLS = [
     "value_diff",
@@ -72,94 +76,105 @@ def _preprocess(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _find_csv_files(base: str) -> list:
-    """
-    Βρίσκει CSV αρχεία. Υποστηρίζει:
-      - house_N/input_data.csv (συνθετικά)
-      - *.csv απευθείας στο base/ (LCL)
-    """
-    paths = []
-    for house_id in range(1, 11):
-        p = os.path.join(base, f"house_{house_id}", "input_data.csv")
-        if os.path.exists(p):
-            paths.append(p)
+    """Όλα τα house_N/input_data.csv (ταξινομημένα κατά N), αλλιώς *.csv."""
+    paths = glob.glob(os.path.join(base, "house_*", "input_data.csv"))
 
+    def _num(p):
+        try:
+            return int(os.path.basename(os.path.dirname(p)).split("_")[1])
+        except Exception:
+            return 10 ** 9
+    paths = sorted(paths, key=_num)
     if not paths:
         paths = sorted(glob.glob(os.path.join(base, "*.csv")))
-
     return paths
 
 
-def _load_test_data() -> pd.DataFrame:
-    start_idx = TEST_DAYS_START * POINTS_PER_DAY
-    end_idx   = TEST_DAYS_END   * POINTS_PER_DAY
+def _windows():
+    t0 = pd.to_datetime(TRAINING_DATE)
+    tr = (t0, t0 + pd.Timedelta(days=TRAIN_DAYS))
+    ev = (t0 + pd.Timedelta(days=TRAIN_DAYS + 1),
+          t0 + pd.Timedelta(days=TRAIN_DAYS + 1 + EVAL_DAYS))
+    return tr, ev
 
-    dfs = []
+
+def _load_houses() -> list:
+    """Επιστρέφει [(name, X_eval_norm, y_eval_norm, stats)] για κάθε σπίτι."""
+    (tr0, tr1), (ev0, ev1) = _windows()
+    out = []
     for base in ["/app/data", "./data"]:
         if not os.path.isdir(base):
             continue
-
         csv_files = _find_csv_files(base)
         if not csv_files:
             continue
-
-        logger.info("Cloud eval: found %d CSV files in %s", len(csv_files), base)
-
+        logger.info("Cloud eval: found %d houses in %s | eval window %s -> %s",
+                    len(csv_files), base, ev0.date(), ev1.date())
         for path in csv_files:
+            name = os.path.basename(os.path.dirname(path)) or os.path.basename(path)
             try:
-                df = pd.read_csv(path)
-                if "value_diff" not in df.columns:
-                    df = _preprocess(df)
-                slice_df = df.iloc[start_idx:end_idx]
-                if len(slice_df) > SEQUENCE_LENGTH:
-                    dfs.append(slice_df)
-                else:
-                    logger.warning("Cloud eval: %s has only %d rows in test range, skipping.", path, len(slice_df))
+                raw = pd.read_csv(path)
+                ts = pd.to_datetime(raw["timestamp"], errors="coerce")
+                tr_df = _preprocess(raw[(ts >= tr0) & (ts < tr1)].copy())
+                ev_df = _preprocess(raw[(ts >= ev0) & (ts < ev1)].copy())
+                if len(ev_df) <= SEQUENCE_LENGTH:
+                    logger.warning("Cloud eval: %s has only %d eval rows, skipping.", name, len(ev_df))
+                    continue
+                stats = norm.fit_stats(tr_df) if norm.enabled() else None
+                ev_n = norm.transform_df(ev_df, stats)
+                ev_n = ev_n.dropna(subset=FEATURE_COLS + ["value"])
+                X = ev_n[FEATURE_COLS].astype("float32").values
+                y = ev_n["value"].astype("float32").values
+                out.append((name, X, y, stats))
             except Exception as e:
                 logger.error("Cloud eval: failed to load %s: %s", path, e)
-
-        if dfs:
+        if out:
             break
-
-    if not dfs:
+    if not out:
         logger.warning("Cloud eval: no test data found — skipping evaluation.")
-        return pd.DataFrame()
-
-    return pd.concat(dfs, ignore_index=True)
+    return out
 
 
-def _evaluate(model, df: pd.DataFrame) -> dict:
-    df = df.dropna(subset=FEATURE_COLS + ["value"])
-    if len(df) <= SEQUENCE_LENGTH:
-        logger.warning("Cloud eval: not enough test rows (%d).", len(df))
-        return {}
-
-    X = df[FEATURE_COLS].astype("float32").values
-    y = df["value"].astype("float32").values
-
+def _predict(model, X, y):
     ds = timeseries_dataset_from_array(
-        data=X, targets=y,
-        sequence_length=SEQUENCE_LENGTH,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
+        data=X, targets=y, sequence_length=SEQUENCE_LENGTH,
+        batch_size=BATCH_SIZE, shuffle=False,
     )
-    steps = max(1, int(np.ceil((len(df) - SEQUENCE_LENGTH) / BATCH_SIZE)))
+    yt, yp = [], []
+    for xb, yb in ds:
+        yp.append(model.predict(xb, verbose=0).flatten())
+        yt.append(yb.numpy())
+    return np.concatenate(yt), np.concatenate(yp)
 
-    y_true, y_pred = [], []
-    for X_batch, y_batch in ds.take(steps):
-        preds = model.predict(X_batch, verbose=0)
-        y_true.append(y_batch.numpy())
-        y_pred.append(preds.flatten())
 
-    if not y_true:
+def _evaluate(model, houses: list) -> dict:
+    yt_kwh, yp_kwh, yt_n, yp_n, per_house = [], [], [], [], {}
+    for name, X, y, stats in houses:
+        t, p = _predict(model, X, y)
+        tk, pk = norm.inverse_target(t, stats), norm.inverse_target(p, stats)
+        yt_kwh.append(tk); yp_kwh.append(pk); yt_n.append(t); yp_n.append(p)
+        per_house[name] = {
+            "mse": float(mean_squared_error(tk, pk)),
+            "r2": float(r2_score(tk, pk)),
+        }
+    if not yt_kwh:
         return {}
-
-    y_true = np.concatenate(y_true)
-    y_pred = np.concatenate(y_pred)
-
+    tk, pk = np.concatenate(yt_kwh), np.concatenate(yp_kwh)
+    tn, pn = np.concatenate(yt_n), np.concatenate(yp_n)
+    r2s = [v["r2"] for v in per_house.values()]
     return {
-        "mse": float(mean_squared_error(y_true, y_pred)),
-        "mae": float(mean_absolute_error(y_true, y_pred)),
-        "r2":  float(r2_score(y_true, y_pred)),
+        # pooled, σε kWh (ίδια μονάδα με τα παλιά runs)
+        "mse": float(mean_squared_error(tk, pk)),
+        "mae": float(mean_absolute_error(tk, pk)),
+        "r2":  float(r2_score(tk, pk)),
+        # pooled στον κανονικοποιημένο χώρο
+        "mse_norm": float(mean_squared_error(tn, pn)),
+        "r2_norm":  float(r2_score(tn, pn)),
+        # ανά σπίτι
+        "r2_house_median": float(np.median(r2s)),
+        "r2_house_min":    float(np.min(r2s)),
+        "n_houses": len(per_house),
+        "per_house": per_house,
     }
 
 
@@ -175,11 +190,11 @@ def evaluate_global_model(round_num: int):
         logger.error("Cloud eval: failed to load model: %s", e)
         return
 
-    test_df = _load_test_data()
-    if test_df.empty:
+    houses = _load_houses()
+    if not houses:
         return
 
-    metrics = _evaluate(model, test_df)
+    metrics = _evaluate(model, houses)
     if not metrics:
         return
 
@@ -187,8 +202,11 @@ def evaluate_global_model(round_num: int):
     metrics["timestamp"] = int(time.time())
 
     logger.info(
-        "Cloud eval [Round %d]: MSE=%.4f | MAE=%.4f | R²=%.4f",
-        round_num, metrics["mse"], metrics["mae"], metrics["r2"]
+        "Cloud eval [Round %d]: MSE=%.4f | MAE=%.4f | R²=%.4f (kWh, pooled) | "
+        "R²_norm=%.4f | median house R²=%.4f | min house R²=%.4f | houses=%d",
+        round_num, metrics["mse"], metrics["mae"], metrics["r2"],
+        metrics["r2_norm"], metrics["r2_house_median"], metrics["r2_house_min"],
+        metrics["n_houses"],
     )
 
     _append_metrics(metrics)
@@ -212,3 +230,5 @@ def _append_metrics(metrics: dict):
 
     except Exception as e:
         logger.error("Cloud eval: failed to save metrics: %s", e)
+
+        

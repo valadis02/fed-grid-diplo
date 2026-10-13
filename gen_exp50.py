@@ -42,6 +42,8 @@ def edge_block(i, fog_ip, root, rounds, epochs):
       - TRAINING_DATE=2012-02-01
       - EPOCHS={epochs}
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -64,7 +66,12 @@ def cloud_yml(root_a, n_fogs):
       - CLOUD_MQTT_PORT=1883
       - APP_HOST_PORT=8081
       - FOG_NAMES={fog_names}
+      - FALLBACK_FOG_NAMES={fog_names}
       - NUM_FOG_NODES={n_fogs}
+      - TRAINING_DATE=2012-02-01
+      - TRAIN_DAYS=274
+      - EVAL_DAYS=92
+      - NORMALIZATION=per_house
     ports:
       - "8082:8081"
     depends_on:
@@ -136,7 +143,10 @@ def fog_yml(k, root_pi, ip_a, edge_names):
       - EDGE_NAMES={",".join(edge_names)}
       - ENCRYPTION_MODE=none
       - AGGREGATION_STRATEGY=fedavg
+      - FEDAVG_WEIGHTING=uniform
       - KRUM_NUM_BYZANTINE=0
+      - NORMALIZATION=per_house
+      - TRAIN_DAYS=274
     ports:
       - "8084:8081"
     depends_on:

@@ -17,6 +17,7 @@ import tensorflow as tf
 
 from tensorflow.keras.preprocessing import timeseries_dataset_from_array
 from shared.logging_config import logger
+from shared import normalization as norm
 
 # ── Env vars ──────────────────────────────────────────────────────────────────
 FLTRUST_ROOT_DATA_PATH = os.getenv('FLTRUST_ROOT_DATA_PATH', '')
@@ -172,15 +173,27 @@ def train_server_model(fog_model_path: str) -> list | None:
 
     try:
         df_raw = pd.read_csv(FLTRUST_ROOT_DATA_PATH, low_memory=False)
+
+        # Κρατάμε μόνο TRAIN_DAYS μέρες ΠΡΙΝ το preprocessing.
+        # (Διόρθωση: τα input_data.csv έχουν στήλη 'timestamp', όχι 'datetime',
+        #  οπότε πριν το φίλτρο δεν εφαρμοζόταν και χρησιμοποιούνταν όλο το αρχείο.)
+        tcol = 'timestamp' if 'timestamp' in df_raw.columns else (
+            'datetime' if 'datetime' in df_raw.columns else None)
+        if tcol is not None:
+            ts = pd.to_datetime(df_raw[tcol], errors='coerce')
+            min_date = ts.min()
+            max_train_date = min_date + pd.Timedelta(days=TRAIN_DAYS)
+            df_raw = df_raw[(ts >= min_date) & (ts < max_train_date)].reset_index(drop=True)
+            logger.info(f"FLTrust2 server: root data window {min_date} -> {max_train_date} ({TRAIN_DAYS} days)")
+
         df = _preprocess_server_df(df_raw.copy())
 
-        # Κρατάμε μόνο TRAIN_DAYS μέρες
-        if 'datetime' in df_raw.columns:
-            df_raw['datetime'] = pd.to_datetime(df_raw['datetime'], errors='coerce')
-            min_date = df_raw['datetime'].min()
-            max_train_date = min_date + pd.Timedelta(days=TRAIN_DAYS)
-            mask = (df_raw['datetime'] <= max_train_date).values
-            df = df.iloc[:len(mask)][mask[:len(df)]]
+        if norm.enabled():
+            stats = norm.fit_stats(df)
+            df = norm.transform_df(df, stats)
+            logger.info(
+                f"FLTrust2 server: per-house normalization | mu={stats['mu']:.4f} | sd={stats['sd']:.4f}"
+            )
 
         logger.info(f"FLTrust2 server: preprocessed shape={df.shape}")
 
@@ -211,3 +224,5 @@ def train_server_model(fog_model_path: str) -> list | None:
     except Exception as e:
         logger.error(f"FLTrust2 server training failed: {e}", exc_info=True)
         return None
+
+    

@@ -22,6 +22,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -46,6 +48,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -70,6 +74,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -94,6 +100,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -118,6 +126,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -142,6 +152,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -166,6 +178,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -190,6 +204,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -214,6 +230,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -238,6 +256,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -262,6 +282,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -286,6 +308,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -310,6 +334,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -334,6 +360,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -358,6 +386,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -382,6 +412,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -406,6 +438,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -430,6 +464,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -454,6 +490,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -478,6 +516,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -502,6 +542,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -526,6 +568,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -550,6 +594,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -574,6 +620,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -598,6 +646,8 @@ services:
       - TRAINING_DATE=2012-02-01
       - EPOCHS=5
       - ATTACK_TYPE=none
+      - NORMALIZATION=per_house
+      - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:

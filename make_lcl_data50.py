@@ -83,6 +83,25 @@ def shape(raw, kwh, value_mode):
     return d[["timestamp", "consumption_kwh"]].reset_index(drop=True)
 
 
+MAX_MONTH_ZERO_FRAC = 0.5    # π.χ. κενό σπίτι για έναν μήνα -> απόρριψη
+MIN_EVAL_TRAIN_RATIO = 0.25  # μέσος eval / μέσος train: κάτω από αυτό -> απόρριψη
+EVAL_START = "2012-11-02"
+
+
+def usable(df):
+    """Απορρίπτει σπίτια που είναι (σχεδόν) άδεια για κάποιο διάστημα,
+    π.χ. MAC που έμεινε κενό τον Δεκέμβριο (100% μηδενικά στο eval)."""
+    v = df["consumption_kwh"].astype(float)
+    t = pd.to_datetime(df["timestamp"])
+    zero_by_month = (v == 0).groupby(t.dt.to_period("M")).mean()
+    if zero_by_month.max() > MAX_MONTH_ZERO_FRAC:
+        return False, f"month with {zero_by_month.max():.0%} zeros ({zero_by_month.idxmax()})"
+    tr, ev = v[t < EVAL_START].mean(), v[t >= EVAL_START].mean()
+    if tr <= 0 or ev / tr < MIN_EVAL_TRAIN_RATIO:
+        return False, f"eval/train mean ratio {ev / max(tr, 1e-9):.2f}"
+    return True, ""
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lcl", required=True)
@@ -134,6 +153,9 @@ def main():
         os.makedirs(dst, exist_ok=True)
         shutil.copy2(os.path.join(a.src, f"house_{n}", FNAME), os.path.join(dst, FNAME))
         manifest.append((n, EXISTING[n - 1], "thesis house"))
+        ok, why = usable(pd.read_csv(os.path.join(dst, FNAME)))
+        if not ok:
+            print(f"[warn] thesis house_{n} ({EXISTING[n - 1]}): {why}")
 
     n = N_EXISTING
     for mac in pool:
@@ -144,6 +166,10 @@ def main():
         df = shape(data[mac], kwh, mode)
         if len(df) != SLOTS:
             print(f"[skip] {mac}: {SLOTS - len(df)} missing after dedupe")
+            continue
+        ok, why = usable(df)
+        if not ok:
+            print(f"[skip] {mac}: {why}")
             continue
         n += 1
         dst = os.path.join(a.out, f"house_{n}")

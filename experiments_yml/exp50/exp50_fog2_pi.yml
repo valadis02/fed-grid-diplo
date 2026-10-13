@@ -39,7 +39,10 @@ services:
       - EDGE_NAMES=edge_node_26,edge_node_27,edge_node_28,edge_node_29,edge_node_30,edge_node_31,edge_node_32,edge_node_33,edge_node_34,edge_node_35,edge_node_36,edge_node_37,edge_node_38,edge_node_39,edge_node_40,edge_node_41,edge_node_42,edge_node_43,edge_node_44,edge_node_45,edge_node_46,edge_node_47,edge_node_48,edge_node_49,edge_node_50
       - ENCRYPTION_MODE=none
       - AGGREGATION_STRATEGY=fedavg
+      - FEDAVG_WEIGHTING=uniform
       - KRUM_NUM_BYZANTINE=0
+      - NORMALIZATION=per_house
+      - TRAIN_DAYS=274
     ports:
       - "8084:8081"
     depends_on:
