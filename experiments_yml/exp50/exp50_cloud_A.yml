@@ -16,7 +16,6 @@ services:
       - APP_HOST_PORT=8081
       - FOG_NAMES=FOG_NODE_1,FOG_NODE_2
       - NUM_FOG_NODES=2
-      - FALLBACK_FOG_NAMES=FOG_NODE_1,FOG_NODE_2
     ports:
       - "8082:8081"
     depends_on:
