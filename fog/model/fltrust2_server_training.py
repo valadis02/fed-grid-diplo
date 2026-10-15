@@ -18,6 +18,7 @@ import tensorflow as tf
 from tensorflow.keras.preprocessing import timeseries_dataset_from_array
 from shared.logging_config import logger
 from shared import normalization as norm
+from shared import forecasting as fc
 
 # ── Env vars ──────────────────────────────────────────────────────────────────
 FLTRUST_ROOT_DATA_PATH = os.getenv('FLTRUST_ROOT_DATA_PATH', '')
@@ -171,6 +172,9 @@ def train_server_model(fog_model_path: str) -> list | None:
         f"epochs={FLTRUST_EPOCHS} | lr={FLTRUST_LR} | seq_len={SEQUENCE_LENGTH}"
     )
 
+    if fc.dayahead():
+        return _train_server_dayahead(fog_model_path)
+
     try:
         df_raw = pd.read_csv(FLTRUST_ROOT_DATA_PATH, low_memory=False)
 
@@ -223,6 +227,35 @@ def train_server_model(fog_model_path: str) -> list | None:
 
     except Exception as e:
         logger.error(f"FLTrust2 server training failed: {e}", exc_info=True)
+        return None
+
+
+def _train_server_dayahead(fog_model_path: str):
+    """FLTrust2 server model για FORECAST_MODE=dayahead: ίδια δεδομένα/στόχοι/loss με τα edges.
+    Παράθυρο: [TRAINING_DATE, +TRAIN_DAYS) αν δοθεί TRAINING_DATE, αλλιώς από την αρχή του αρχείου."""
+    try:
+        start = os.getenv('TRAINING_DATE', '')
+        raw = fc.load_series(FLTRUST_ROOT_DATA_PATH)
+        t0 = pd.Timestamp(start) if start else raw['ts'].iloc[0]
+        t1 = t0 + pd.Timedelta(days=TRAIN_DAYS)
+        tr = raw[(raw['ts'] >= t0) & (raw['ts'] < t1)].reset_index(drop=True)
+        stats = fc.fit_stats(tr) if norm.enabled() else None
+        A = fc.build_arrays(tr, stats)
+        if A['n'] == 0:
+            logger.warning("FLTrust2 server (dayahead): no training samples.")
+            return None
+        logger.info(f"FLTrust2 server (dayahead): root window {t0.date()} -> {t1.date()} | samples={A['n']}")
+
+        server_model = tf.keras.models.load_model(fog_model_path, compile=False)
+        server_model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=FLTRUST_LR), loss='mse')
+        t_start = time.perf_counter()
+        server_model.fit([A['Xh'], A['Xf']], A['y'], epochs=FLTRUST_EPOCHS, batch_size=BATCH_SIZE,
+                         shuffle=True, verbose=0)
+        w_server = server_model.get_weights()
+        logger.info(f"FLTrust2 server training (dayahead): done | time={round(time.perf_counter() - t_start, 3)}s")
+        return w_server
+    except Exception as e:
+        logger.error(f"FLTrust2 server training (dayahead) failed: {e}", exc_info=True)
         return None
 
     

@@ -3,6 +3,7 @@ import os
 import tensorflow as tf
 from shared.utils import required_columns
 from shared.logging_config import logger
+from shared import forecasting as fc
 
 # ---------------------------------------------------------------
 # MLP Baseline αρχιτεκτονική (μειωμένη έκδοση, ~48K params):
@@ -63,6 +64,9 @@ def create_model(model_label_or_seq_len=48,
     else:
         sequence_length = int(model_label_or_seq_len)
 
+    if fc.dayahead():
+        return _create_dayahead_model(sequence_length)
+
     inputs = tf.keras.layers.Input(
         shape=(sequence_length, _num_features()), dtype=tf.float32
     )
@@ -84,6 +88,32 @@ def create_model(model_label_or_seq_len=48,
         f"init_seed={MODEL_INIT_SEED} | w0_checksum={w0_sum:.6f}"
     )
     return _compile(model)
+
+def _create_dayahead_model(sequence_length: int) -> tf.keras.Model:
+    """
+    Day-ahead multi-output MLP (FORECAST_MODE=dayahead, βλ. shared/forecasting.py):
+      [ιστορικό (L x 15) → Flatten] ⊕ [features των 48 μισάωρων-στόχων (336)]
+      → Dense(128) → Dropout(0.2) → Dense(64) → Dropout(0.2) → Dense(48)
+    Έξοδος: κανονικοποιημένη απόκλιση από το προφίλ 7 ημερών για κάθε μισάωρο της επόμενης μέρας.
+    """
+    hist = tf.keras.layers.Input(shape=(sequence_length, fc.N_HIST), dtype=tf.float32, name='history')
+    fut = tf.keras.layers.Input(shape=(fc.N_FUT,), dtype=tf.float32, name='target_day')
+    x = tf.keras.layers.Concatenate()([tf.keras.layers.Flatten()(hist), fut])
+    x = tf.keras.layers.Dense(128, activation='relu', kernel_initializer=_kernel_init(0))(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    x = tf.keras.layers.Dense(64, activation='relu', kernel_initializer=_kernel_init(1))(x)
+    x = tf.keras.layers.Dropout(0.2)(x)
+    outputs = tf.keras.layers.Dense(fc.HORIZON, kernel_initializer=_kernel_init(2))(x)
+    model = tf.keras.Model([hist, fut], outputs, name='mlp_dayahead')
+
+    w0_sum = float(sum(float(tf.reduce_sum(w)) for w in model.weights))
+    logger.info(
+        f"[mlp_dayahead] δημιουργήθηκε | params: {model.count_params():,} | "
+        f"inputs: ({sequence_length}, {fc.N_HIST}) + ({fc.N_FUT},) → {fc.HORIZON} | "
+        f"init_seed={MODEL_INIT_SEED} | w0_checksum={w0_sum:.6f}"
+    )
+    return _compile(model)
+
 
 # Backwards compatibility
 def simple_lstm_model(sequence_length: int = 48,

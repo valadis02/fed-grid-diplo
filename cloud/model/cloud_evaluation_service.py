@@ -2,6 +2,8 @@
 cloud_evaluation_service.py
 ============================
 Αξιολογεί το global model μετά από κάθε FL aggregation round.
+FORECAST_MODE=dayahead: πρόβλεψη επόμενης μέρας (00:00) για κάθε σπίτι, μετρικές στο άθροισμα (feeder:
+σύνολο + ανά fog) και ανά σπίτι, μαζί με baselines (προφίλ 7 ημερών, ίδια ώρα πριν 1 εβδομάδα) και skill.
 Υποστηρίζει και LCL data (αρχεία απευθείας στο /app/data/) και
 συνθετικά data (house_1/input_data.csv δομή).
 """
@@ -9,6 +11,7 @@ import os
 import json
 import time
 import glob
+import threading
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -18,6 +21,7 @@ from tensorflow.keras.preprocessing import timeseries_dataset_from_array
 from cloud.communication.cloud_resources_paths import CloudResourcesPaths
 from shared.logging_config import logger
 from shared import normalization as norm
+from shared import forecasting as fc
 
 # ── Configuration ─────────────────────────────────────────────
 SEQUENCE_LENGTH = int(os.getenv('SEQUENCE_LENGTH', 48))
@@ -40,6 +44,13 @@ FEATURE_COLS = [
     "value_rolling_mean_24", "value_volatility_24", "value_ewm_24",
     "drift_flag", "time_since_last_spike",
 ]
+
+# Τα δεδομένα αξιολόγησης δεν αλλάζουν από γύρο σε γύρο: preprocessing ΜΙΑ φορά
+# και cache. Επίσης μόνο ένα evaluation τη φορά (αλλιώς τα threads στοιβάζονται
+# και κλέβουν CPU από τα edges που τρέχουν στο ίδιο μηχάνημα).
+_HOUSES_CACHE = None
+_EVAL_LOCK = threading.Lock()
+EVAL_BATCH = int(os.getenv('CLOUD_EVAL_BATCH', 4096))
 
 RESULTS_FILE = os.path.join(
     CloudResourcesPaths.STATUS_FOLDER_PATH.value,
@@ -125,7 +136,8 @@ def _load_houses() -> list:
                 ev_n = ev_n.dropna(subset=FEATURE_COLS + ["value"])
                 X = ev_n[FEATURE_COLS].astype("float32").values
                 y = ev_n["value"].astype("float32").values
-                out.append((name, X, y, stats))
+                Xw, yw = _windows_of(X, y)
+                out.append((name, Xw, yw, stats))
             except Exception as e:
                 logger.error("Cloud eval: failed to load %s: %s", path, e)
         if out:
@@ -135,22 +147,25 @@ def _load_houses() -> list:
     return out
 
 
-def _predict(model, X, y):
-    ds = timeseries_dataset_from_array(
-        data=X, targets=y, sequence_length=SEQUENCE_LENGTH,
-        batch_size=BATCH_SIZE, shuffle=False,
-    )
-    yt, yp = [], []
-    for xb, yb in ds:
-        yp.append(model.predict(xb, verbose=0).flatten())
-        yt.append(yb.numpy())
-    return np.concatenate(yt), np.concatenate(yp)
+def _windows_of(X, y):
+    """Ίδια αντιστοίχιση με timeseries_dataset_from_array (target y[i] για X[i:i+L]),
+    αλλά vectorized: ένας πίνακας παραθύρων αντί για tf.data loop."""
+    L = SEQUENCE_LENGTH
+    n = len(X) - L + 1
+    Xw = np.lib.stride_tricks.sliding_window_view(X, L, axis=0)[:n]   # (n, F, L)
+    Xw = np.ascontiguousarray(np.transpose(Xw, (0, 2, 1)), dtype=np.float32)  # (n, L, F)
+    return Xw, y[:n].astype(np.float32)
+
+
+def _predict(model, Xw, yw):
+    yp = model.predict(Xw, batch_size=EVAL_BATCH, verbose=0).flatten()
+    return yw, yp
 
 
 def _evaluate(model, houses: list) -> dict:
     yt_kwh, yp_kwh, yt_n, yp_n, per_house = [], [], [], [], {}
-    for name, X, y, stats in houses:
-        t, p = _predict(model, X, y)
+    for name, Xw, yw, stats in houses:
+        t, p = _predict(model, Xw, yw)
         tk, pk = norm.inverse_target(t, stats), norm.inverse_target(p, stats)
         yt_kwh.append(tk); yp_kwh.append(pk); yt_n.append(t); yp_n.append(p)
         per_house[name] = {
@@ -178,6 +193,104 @@ def _evaluate(model, houses: list) -> dict:
     }
 
 
+# ── Day-ahead (FORECAST_MODE=dayahead) ─────────────────────────────────────
+
+def _fog_groups(nums: list) -> dict:
+    """FOG_GROUPS="1-25,26-50" → {'fog1': [...], 'fog2': [...]} (αριθμοί σπιτιών)."""
+    spec = os.getenv("FOG_GROUPS", "1-25,26-50")
+    groups = {}
+    for k, part in enumerate(x for x in spec.split(",") if x.strip()):
+        a, b = (int(v) for v in part.split("-"))
+        groups[f"fog{k + 1}"] = [n for n in nums if a <= n <= b]
+    return {k: v for k, v in groups.items() if v}
+
+
+def _load_houses_dayahead() -> list:
+    """[(num, name, arrays)] με στόχους τις μέρες [T1, T1+EVAL_DAYS), ίδια παράθυρα με τα edges."""
+    t0, t1, e1 = fc.windows(TRAINING_DATE, TRAIN_DAYS, EVAL_DAYS)
+    out = []
+    for base in ["/app/data", "./data"]:
+        if not os.path.isdir(base):
+            continue
+        csv_files = _find_csv_files(base)
+        if not csv_files:
+            continue
+        logger.info("Cloud eval (dayahead): %d houses in %s | train %s -> %s | eval days %s -> %s",
+                    len(csv_files), base, t0.date(), t1.date(), t1.date(), e1.date())
+        for path in csv_files:
+            name = os.path.basename(os.path.dirname(path)) or os.path.basename(path)
+            try:
+                num = int(name.split("_")[1])
+            except Exception:
+                num = len(out) + 1
+            try:
+                ser = fc.load_series(path, t0, e1)
+                tr = ser[ser["ts"] < t1]
+                ev = ser[ser["ts"] >= t1 - pd.Timedelta(days=fc.HISTORY_DAYS)].reset_index(drop=True)
+                stats = fc.fit_stats(tr) if norm.enabled() else None
+                A = fc.build_arrays(ev, stats, target_start=t1, target_end=e1, issue_at_midnight=True)
+                if A["n"] == 0:
+                    logger.warning("Cloud eval: %s has no eval days, skipping.", name)
+                    continue
+                A.pop("ts", None)
+                out.append((num, name, A))
+            except Exception as e:
+                logger.error("Cloud eval: failed to load %s: %s", path, e)
+        if out:
+            break
+    if out:
+        n_days = {A["n"] for _, _, A in out}
+        if len(n_days) > 1:
+            m = min(n_days)
+            logger.warning("Cloud eval: unequal eval days %s — truncating to %d", n_days, m)
+            for _, _, A in out:
+                for k in ("Xh", "Xf", "y", "base_n", "y_kwh", "prof7_kwh", "week_kwh"):
+                    A[k] = A[k][:m]
+                A["n"] = m
+    else:
+        logger.warning("Cloud eval: no test data found — skipping evaluation.")
+    return out
+
+
+def _group_metrics(Y, P, nums, groups):
+    tot = fc.metrics(Y.sum(0), P.sum(0))
+    fogs = {g: fc.metrics(Y[[nums.index(n) for n in ns]].sum(0), P[[nums.index(n) for n in ns]].sum(0))
+            for g, ns in groups.items()}
+    per = [fc.metrics(Y[i], P[i]) for i in range(len(nums))]
+    return tot, fogs, per
+
+
+def _evaluate_dayahead(model, houses: list) -> dict:
+    nums = [n for n, _, _ in houses]
+    groups = _fog_groups(nums)
+    Y = np.stack([A["y_kwh"] for _, _, A in houses])                 # (houses, days, 48)
+    P = np.stack([fc.predict_kwh(model, A, EVAL_BATCH) for _, _, A in houses])
+    tot, fogs, per = _group_metrics(Y, P, nums, groups)
+    res = {
+        "forecast_mode": "dayahead",
+        "feeder": tot,
+        "fogs": fogs,
+        "house_nmae_median": float(np.median([m["nmae"] for m in per])),
+        "house_r2_median": float(np.median([m["r2"] for m in per])),
+        "house_r2_min": float(np.min([m["r2"] for m in per])),
+        "n_houses": len(houses),
+        "per_house": {name: {"nmae": m["nmae"], "r2": m["r2"]} for (_, name, _), m in zip(houses, per)},
+        # συμβατότητα με τα παλιά runs: r2/mse/mae = feeder
+        "r2": tot["r2"], "mse": tot["mse"], "mae": tot["mae"],
+    }
+    for bname, key in (("baseline_prof7", "prof7_kwh"), ("baseline_week", "week_kwh")):
+        B = np.stack([A[key] for _, _, A in houses])
+        bt, bf, bp = _group_metrics(Y, B, nums, groups)
+        res[bname] = {"feeder": bt, "fogs": bf,
+                      "house_nmae_median": float(np.median([m["nmae"] for m in bp])),
+                      "house_r2_median": float(np.median([m["r2"] for m in bp]))}
+    b = res["baseline_prof7"]["feeder"]
+    res["skill_nmae"] = float(1 - tot["nmae"] / b["nmae"])
+    res["skill_day"] = float(1 - tot["day_err"] / b["day_err"])
+    res["skill_house_nmae"] = float(1 - res["house_nmae_median"] / res["baseline_prof7"]["house_nmae_median"])
+    return res
+
+
 def evaluate_global_model(round_num: int):
     model_path = CloudResourcesPaths.CLOUD_MODEL_FILE_PATH.value
     if not os.path.exists(model_path):
@@ -190,23 +303,47 @@ def evaluate_global_model(round_num: int):
         logger.error("Cloud eval: failed to load model: %s", e)
         return
 
-    houses = _load_houses()
-    if not houses:
+    global _HOUSES_CACHE
+    if not _EVAL_LOCK.acquire(blocking=False):
+        logger.warning("Cloud eval [Round %d]: previous evaluation still running — skipped.", round_num)
         return
-
-    metrics = _evaluate(model, houses)
+    try:
+        t0 = time.perf_counter()
+        if _HOUSES_CACHE is None:
+            _HOUSES_CACHE = _load_houses_dayahead() if fc.dayahead() else _load_houses()
+        houses = _HOUSES_CACHE
+        if not houses:
+            return
+        metrics = _evaluate_dayahead(model, houses) if fc.dayahead() else _evaluate(model, houses)
+        if metrics:
+            metrics["eval_time_s"] = round(time.perf_counter() - t0, 2)
+    finally:
+        _EVAL_LOCK.release()
     if not metrics:
         return
 
     metrics["round"] = round_num
     metrics["timestamp"] = int(time.time())
 
+    if fc.dayahead():
+        f, b = metrics["feeder"], metrics["baseline_prof7"]["feeder"]
+        logger.info(
+            "Cloud eval [Round %d] day-ahead: feeder nMAE=%.2f%% (baseline %.2f%%) | R²=%.3f (baseline %.3f) | "
+            "day err=%.2f%% (baseline %.2f%%) | fog nMAE=%s | house nMAE med=%.1f%% R² med=%.3f | "
+            "skill nMAE=%.3f day=%.3f | houses=%d | %.1fs",
+            round_num, f["nmae"] * 100, b["nmae"] * 100, f["r2"], b["r2"], f["day_err"] * 100, b["day_err"] * 100,
+            "/".join(f"{g['nmae'] * 100:.2f}%" for g in metrics["fogs"].values()),
+            metrics["house_nmae_median"] * 100, metrics["house_r2_median"],
+            metrics["skill_nmae"], metrics["skill_day"], metrics["n_houses"], metrics.get("eval_time_s", -1))
+        _append_metrics(metrics)
+        return
+
     logger.info(
         "Cloud eval [Round %d]: MSE=%.4f | MAE=%.4f | R²=%.4f (kWh, pooled) | "
-        "R²_norm=%.4f | median house R²=%.4f | min house R²=%.4f | houses=%d",
+        "R²_norm=%.4f | median house R²=%.4f | min house R²=%.4f | houses=%d | %.1fs",
         round_num, metrics["mse"], metrics["mae"], metrics["r2"],
         metrics["r2_norm"], metrics["r2_house_median"], metrics["r2_house_min"],
-        metrics["n_houses"],
+        metrics["n_houses"], metrics.get("eval_time_s", -1),
     )
 
     _append_metrics(metrics)

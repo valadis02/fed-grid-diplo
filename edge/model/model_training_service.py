@@ -17,6 +17,7 @@ from edge.communication.edge_resources_paths import EdgeResourcesPaths
 from shared.logging_config import logger
 from shared.utils import required_columns
 from shared import normalization as norm
+from shared import forecasting as fc
 
 # ── FedProx configuration ────────────────────────────────────────────────────
 FL_ALGORITHM = os.getenv('FL_ALGORITHM', 'fedavg').lower()
@@ -210,6 +211,9 @@ def train_local_edge_model(
     train_days = int(os.getenv('TRAIN_DAYS', 2))
     eval_days  = int(os.getenv('EVAL_DAYS', 2))
 
+    if fc.dayahead():
+        return _train_dayahead(training_date, train_days, eval_days, batch_size)
+
     # -------- Dates --------
     start_dt = pd.to_datetime(training_date, errors="coerce")
     if pd.isna(start_dt):
@@ -398,6 +402,93 @@ def train_local_edge_model(
         "after_training": after_metrics,
         "before_training_norm": before_norm,
         "after_training_norm": after_norm,
+        "norm_stats": norm_stats,
+        "training_time_secs": training_time_secs,
+        "peak_ram_mb": peak_ram_mb,
+    }
+
+
+# =========================
+# Day-ahead (FORECAST_MODE=dayahead)
+# =========================
+def _train_dayahead(training_date: str, train_days: int, eval_days: int, batch_size: int):
+    """
+    Εκπαίδευση day-ahead multi-output μοντέλου (βλ. shared/forecasting.py).
+      train: [T0, T1), στόχοι από T0 + 14 μέρες (ιστορικό)
+      eval : στόχοι [T1, T1 + EVAL_DAYS), πρόβλεψη μία φορά τη μέρα στις 00:00
+    Μετρικές σε kWh στο eval του σπιτιού (πριν/μετά την τοπική εκπαίδευση).
+    """
+    import gc
+    tf.keras.backend.clear_session(); gc.collect()      # κάθε γύρος φορτώνει νέο μοντέλο — όχι συσσώρευση μνήμης
+    t0, t1, e1 = fc.windows(training_date, train_days, eval_days)
+    logger.info(f"[dayahead] train data {t0.date()} → {t1.date()} | eval targets {t1.date()} → {e1.date()}")
+
+    src = EdgeResourcesPaths.INPUT_DATA_PATH.value
+    tr = fc.load_series(src, t0, t1)
+    ev = fc.load_series(src, t1 - pd.Timedelta(days=fc.HISTORY_DAYS), e1)
+    if len(tr) <= fc.HISTORY_DAYS * 48 + fc.HORIZON:
+        raise ValueError(f"[dayahead] not enough training data ({len(tr)} rows) in {t0.date()}–{t1.date()}")
+
+    norm_stats = fc.fit_stats(tr) if norm.enabled() else None
+    if norm_stats is not None:
+        norm.save_stats(norm_stats, os.path.join(EdgeResourcesPaths.MODELS_FOLDER_PATH.value, "norm_stats.json"))
+        logger.info(f"Normalization: per-house | mu={norm_stats['mu']:.4f} kWh | sd={norm_stats['sd']:.4f} kWh")
+
+    A_tr = fc.build_arrays(tr, norm_stats)
+    A_ev = fc.build_arrays(ev, norm_stats, target_start=t1, target_end=e1, issue_at_midnight=True)
+    logger.info(f"[dayahead] train samples={A_tr['n']} | eval days={A_ev.get('n', 0)}")
+
+    model_path = EdgeResourcesPaths.NON_TRAINED_LOCAL_EDGE_MODEL_FILE_PATH.value
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Base model not found: {model_path}")
+    base_model = tf.keras.models.load_model(model_path, compile=False)
+
+    def _eval(m):
+        if A_ev.get("n", 0) == 0:
+            return {}
+        return fc.metrics(A_ev["y_kwh"], fc.predict_kwh(m, A_ev))
+
+    before_metrics = _eval(base_model)
+    logger.info(f"Metrics before training (kWh, day-ahead): {before_metrics}")
+
+    if FL_ALGORITHM == 'fedprox':
+        logger.info(f"Using FedProx (mu={FEDPROX_MU})")
+        global_weights = [w.numpy() for w in base_model.trainable_variables]
+        model = FedProxModel(base_model, global_weights, mu=FEDPROX_MU)
+        model.compile(optimizer=tf.keras.optimizers.Adam(0.001))
+    else:
+        model = base_model
+        model.compile(optimizer=tf.keras.optimizers.Adam(0.001), loss='mse')
+
+    epochs = int(os.getenv("EPOCHS", 40))
+    logger.info(f"Starting local day-ahead training ({FL_ALGORITHM.upper()}) | epochs={epochs} | batch={batch_size}")
+    ram_monitor = PeakRamMonitor(interval=0.5)
+    ram_monitor.start()
+    t_train_start = time.perf_counter()
+    model.fit([A_tr["Xh"], A_tr["Xf"]], A_tr["y"], epochs=epochs, batch_size=batch_size, shuffle=True, verbose=2)
+    training_time_secs = round(time.perf_counter() - t_train_start, 2)
+    peak_ram_mb = ram_monitor.stop()
+    logger.info(f"Training time: {training_time_secs}s | Peak RAM: {peak_ram_mb} MB")
+
+    inference_model = base_model if FL_ALGORITHM == 'fedprox' else model
+    after_metrics = _eval(inference_model)
+    logger.info(f"Metrics after training (kWh, day-ahead): {after_metrics}")
+
+    Path(EdgeResourcesPaths.MODELS_FOLDER_PATH.value).mkdir(parents=True, exist_ok=True)
+    # Αποθήκευση ΧΩΡΙΣ optimizer state (το Keras 3 αγνοεί include_optimizer): ~0,6 MB αντί ~1,8 MB προς το fog
+    clean = tf.keras.Model.from_config(inference_model.get_config())     # ασυμπίεστο, χωρίς compile/optimizer
+    clean.set_weights(inference_model.get_weights())
+    clean.save(EdgeResourcesPaths.TRAINED_LOCAL_EDGE_MODEL_FILE_PATH.value)
+    logger.info("Local edge day-ahead training completed successfully.")
+
+    return {
+        "fl_algorithm": FL_ALGORITHM,
+        "fedprox_mu": FEDPROX_MU if FL_ALGORITHM == 'fedprox' else None,
+        "forecast_mode": "dayahead",
+        "before_training": before_metrics,
+        "after_training": after_metrics,
+        "before_training_norm": {},
+        "after_training_norm": {},
         "norm_stats": norm_stats,
         "training_time_secs": training_time_secs,
         "peak_ram_mb": peak_ram_mb,
