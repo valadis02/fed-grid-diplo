@@ -10,7 +10,8 @@ run_federated_cycle.py
   [Πείραμα 3/4] Καταγράφει χρόνους και RAM ανά γύρο.
   [Πείραμα 4]   AES-256-GCM κρυπτογράφηση.
   [Πείραμα 8]   CKKS Homomorphic Encryption (poly_mod=16384).
-  [Byzantine]   ATTACK_TYPE=label_flipping|sign_flipping|gaussian_noise
+  [Byzantine]   ATTACK_TYPE=label_flipping|sign_flipping|sign_flipping_weights|gaussian_noise
+                (ATTACK_ZETA, ATTACK_NOISE_SCALE)
 """
 import os
 import sys
@@ -123,52 +124,54 @@ def _pika_connect(retries=10, delay=5):
 
 
 # ── Byzantine attack ──────────────────────────────────────────────────────────
+ATTACK_ZETA        = float(os.getenv('ATTACK_ZETA', '2.6'))
+ATTACK_NOISE_SCALE = float(os.getenv('ATTACK_NOISE_SCALE', '30.0'))
+
+
 def apply_attack(model_path: str) -> str:
     """
-    Αλλοιώνει το εκπαιδευμένο μοντέλο πριν την αποστολή στο Fog.
-    Επιστρέφει το path του αλλοιωμένου μοντέλου (αντικαθιστά το original).
+    Αλλοιώνει το μοντέλο πριν την αποστολή στο Fog. Οι επιθέσεις ορίζονται πάνω στο update
+    g = w_i − w_t, όπου w_t = το global μοντέλο από το οποίο ξεκίνησε ο γύρος
+    (NON_TRAINED_LOCAL_EDGE_MODEL_FILE_PATH: το seeded w0 στον γύρο 1, μετά το broadcast του fog).
 
-    - label_flipping : αντιστρέφει τα weights του τελευταίου Dense(1) layer
-                       → σπρώχνει τις προβλέψεις στην αντίθετη κατεύθυνση
-    - sign_flipping  : πολλαπλασιάζει ΟΛΑ τα weights με -1
-    - gaussian_noise : προσθέτει τυχαίο θόρυβο μεγάλης διακύμανσης σε όλα τα weights
+    - label_flipping : data poisoning. Σε FORECAST_MODE=dayahead γίνεται ΣΤΗΝ ΕΚΠΑΙΔΕΥΣΗ
+                       (στόχοι ỹ = y_max + y_min − y, βλ. model_training_service) → εδώ τίποτα.
+                       Σε legacy: όπως πριν, αντιστροφή του τελευταίου layer.
+    - sign_flipping  : g̃ = −ζ·g  → w̃ = w_t − ζ·(w_i − w_t), ζ = ATTACK_ZETA (default 2.6)
+    - sign_flipping_weights : w̃ = −w (εκδοχή διπλωματικής· στο day-ahead/prof7 μοντέλο απλώς «σβήνει» το δίκτυο)
+    - gaussian_noise : g̃ = g + N(0, σ²I) → w̃ = w_i + N(0, σ²I), σ = ATTACK_NOISE_SCALE (default 30)
     """
     if ATTACK_TYPE == 'none':
         return model_path
 
     import tensorflow as tf
+    from shared import forecasting as fc
 
     t_attack_start = time.perf_counter()
     model = tf.keras.models.load_model(model_path, compile=False)
     weights = model.get_weights()
 
     if ATTACK_TYPE == 'label_flipping':
-        # Αντιστροφή μόνο του τελευταίου layer (Dense(1) kernel + bias)
-        # Τα weights[-2] = kernel, weights[-1] = bias του τελευταίου Dense
+        if fc.dayahead():
+            logger.warning(f"Edge [{EDGE_NAME}]: LABEL FLIPPING (data poisoning) — applied during training.")
+            return model_path
         weights[-2] = -weights[-2]
         weights[-1] = -weights[-1]
-        logger.warning(
-            f"Edge [{EDGE_NAME}]: LABEL FLIPPING applied — "
-            f"last layer weights negated."
-        )
+        logger.warning(f"Edge [{EDGE_NAME}]: LABEL FLIPPING (legacy) — last layer weights negated.")
 
     elif ATTACK_TYPE == 'sign_flipping':
-        # Αντιστροφή ΟΛΩΝ των weights
+        ref_path = EdgeResourcesPaths.NON_TRAINED_LOCAL_EDGE_MODEL_FILE_PATH.value
+        w_t = tf.keras.models.load_model(ref_path, compile=False).get_weights()
+        weights = [(wt - ATTACK_ZETA * (wi - wt)).astype(wi.dtype) for wi, wt in zip(weights, w_t)]
+        logger.warning(f"Edge [{EDGE_NAME}]: SIGN FLIPPING applied — update g -> -{ATTACK_ZETA}*g.")
+
+    elif ATTACK_TYPE == 'sign_flipping_weights':
         weights = [-w for w in weights]
-        logger.warning(
-            f"Edge [{EDGE_NAME}]: SIGN FLIPPING applied — "
-            f"all weights negated."
-        )
+        logger.warning(f"Edge [{EDGE_NAME}]: SIGN FLIPPING (weights) applied — all weights negated.")
 
     elif ATTACK_TYPE == 'gaussian_noise':
-        # Προσθήκη μεγάλου τυχαίου θορύβου σε όλα τα weights
-        noise_scale = float(os.getenv('ATTACK_NOISE_SCALE', '10.0'))
-        weights = [w + np.random.normal(0, noise_scale, w.shape).astype(w.dtype)
-                   for w in weights]
-        logger.warning(
-            f"Edge [{EDGE_NAME}]: GAUSSIAN NOISE applied — "
-            f"scale={noise_scale}."
-        )
+        weights = [w + np.random.normal(0, ATTACK_NOISE_SCALE, w.shape).astype(w.dtype) for w in weights]
+        logger.warning(f"Edge [{EDGE_NAME}]: GAUSSIAN NOISE applied — g + N(0, {ATTACK_NOISE_SCALE}^2).")
 
     else:
         logger.warning(f"Edge: Unknown attack type '{ATTACK_TYPE}' — no attack applied.")
@@ -507,4 +510,5 @@ if __name__ == '__main__':
     logger.info("\n" + "=" * 60)
     logger.info(" FEDERATED CYCLE COMPLETE")
     logger.info("=" * 60)
+
     

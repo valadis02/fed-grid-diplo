@@ -45,6 +45,8 @@ FEDEMA_COS_THRESHOLD  = float(os.getenv('FEDEMA_COS_THRESHOLD', '0.5'))
 
 # ── FedConsensus Parameters ───────────────────────────────────────────────────
 FEDCONSENSUS_MAD_K = float(os.getenv('FEDCONSENSUS_MAD_K', '1.4826'))
+# FedConsensus-v2: σχετικό κατώφλι ψηφοφορίας τ = KAPPA · median_i(s_i)
+FEDCONSENSUS_KAPPA = float(os.getenv('FEDCONSENSUS_KAPPA', '0.5'))
 
 # Σταθερό trim (ΟΧΙ per-scenario oracle) για τον γύρο 1, όταν δεν υπάρχει
 # κανένα reference model (ούτε fog_model.keras ούτε round-0 broadcast).
@@ -201,6 +203,10 @@ def _get_w_prev_with_round0_fallback(strategy_label: str,
         except Exception as _e:
             logger.warning(f"{strategy_label}: could not load initial reference model: {_e}")
 
+    w0 = _build_round0_reference(strategy_label)
+    if w0 is not None:
+        return w0, False
+
     logger.warning(
         f"{strategy_label}: true cold start, no reference available — "
         f"using fixed Trimmed Mean (trim=3, worst-case-fixed, NOT per-scenario "
@@ -208,6 +214,37 @@ def _get_w_prev_with_round0_fallback(strategy_label: str,
         f"under e.g. Gaussian Noise before any reference model exists."
     )
     return None, True
+
+
+def _build_round0_reference(strategy_label: str):
+    """
+    Γύρος 1: τα edges ξεκινούν όλα από το ΙΔΙΟ w0 (create_model με seeded initializers,
+    MODEL_INIT_SEED). Ο fog χτίζει ακριβώς το ίδιο μοντέλο, ώστε τα updates g_i = w_i − w0
+    να υπολογίζονται σωστά ήδη από τον 1ο γύρο (FLTrust / FedConsensus), αντί για fallback.
+    Προϋπόθεση: ίδιο FORECAST_MODE και MODEL_INIT_SEED στο fog με τα edges.
+    """
+    try:
+        from shared.model_architectures import create_model
+        m = create_model(os.getenv('MODEL_ARCHITECTURE', 'simple_lstm_two_gates'))
+        os.makedirs(os.path.dirname(FOG_INITIAL_MODEL_PATH) or '.', exist_ok=True)
+        m.save(FOG_INITIAL_MODEL_PATH, include_optimizer=False)
+        w0 = m.get_weights()
+        logger.info(f"{strategy_label}: round 1 — built seeded w0 reference "
+                    f"(checksum={float(sum(float(np.sum(w)) for w in w0)):.6f}) → {FOG_INITIAL_MODEL_PATH}")
+        return w0
+    except Exception as e:
+        logger.warning(f"{strategy_label}: could not build round-0 reference: {e}")
+        return None
+
+
+def _reference_model_path() -> str | None:
+    """Path του μοντέλου από το οποίο ξεκίνησαν τα edges αυτόν τον γύρο (για FLTrust2 server training)."""
+    p = FogResourcesPaths.FOG_MODEL_FILE_PATH.value
+    if os.path.exists(p):
+        return p
+    if os.path.exists(FOG_INITIAL_MODEL_PATH) or _build_round0_reference("FLTrust2") is not None:
+        return FOG_INITIAL_MODEL_PATH
+    return None
 
 
 # ── Aggregation algorithms ────────────────────────────────────────────────────
@@ -699,6 +736,61 @@ def _fedconsensus_sv(weights_list: list, node_ids: list, w_prev: list) -> list:
     return aggregated
 
 
+# ── FedConsensus-v2 (σχετικό κατώφλι ψηφοφορίας) ─────────────────────────────
+
+def _fedconsensus_v2(weights_list: list, node_ids: list, w_prev: list) -> list:
+    """
+    FedConsensus με διορθωμένο κατώφλι ψηφοφορίας.
+
+    Ίδια με το original: T[j,i] = ReLU(cos(g_j, g_i)), ψηφοφορία πλειοψηφίας, στάθμιση με τη
+    μέση εμπιστοσύνη από τους trusted peers, norm clipping στη median norm των trusted.
+
+    Αλλαγή: ο j ψηφίζει τον i αν T[j,i] ≥ τ, και ο i είναι trusted αν τον ψηφίζει η πλειοψηφία
+    των peers ⇔ s_i = median_{j≠i} T[j,i] ≥ τ, με τ = KAPPA · median_i(s_i).
+    Το original έβαζε τ = μέσος όρος όλου του T: η κατανομή του T είναι δεξιά ασύμμετρη, οπότε
+    καθώς συγκλίνει το μοντέλο (μικρά cosines) κανείς δεν μάζευε πλειοψηφία → 0 trusted →
+    FedAvg όλων (και των επιτιθέμενων). Με σχετικό κατώφλι, όσο οι επιτιθέμενοι είναι < 50%,
+    ο «τυπικός» κόμβος είναι τίμιος και το κατώφλι ακολουθεί την κλίμακα των τίμιων cosines.
+    Αν παρ' όλα αυτά δεν υπάρχει κανείς trusted → κρατά w_prev (όχι FedAvg).
+    """
+    n = len(weights_list)
+    gradients = [[wc - wp for wc, wp in zip(w, w_prev)] for w in weights_list]
+    F = np.stack([np.concatenate([g.ravel() for g in gl]) for gl in gradients]).astype(np.float64)
+    norms = np.linalg.norm(F, axis=1)
+    Fn = F / np.maximum(norms[:, None], 1e-12)
+    T = np.clip(Fn @ Fn.T, 0.0, None)
+    T[norms < 1e-10, :] = 0.0
+    T[:, norms < 1e-10] = 0.0
+
+    s = np.array([np.median(np.delete(T[:, i], i)) for i in range(n)])
+    tau = FEDCONSENSUS_KAPPA * float(np.median(s))
+    trusted = (s >= tau) & (s > 0)
+    idx = np.where(trusted)[0]
+
+    for i in range(n):
+        logger.info(f"FedConsensus-v2: node={node_ids[i]} | s={s[i]:.4f} | "
+                    f"{'TRUSTED' if trusted[i] else 'EXCLUDED'}")
+    logger.info(f"FedConsensus-v2: tau={tau:.4f} (kappa={FEDCONSENSUS_KAPPA}) | trusted={len(idx)}/{n} | "
+                f"excluded={[node_ids[i] for i in range(n) if not trusted[i]]}")
+
+    if len(idx) == 0:
+        logger.warning("FedConsensus-v2: no trusted nodes — keeping w_prev (no update this round).")
+        return [w.copy() for w in w_prev]
+
+    ts = np.array([np.mean([T[j, i] for j in idx if j != i]) if len(idx) > 1 else 1.0 for i in idx])
+    if ts.sum() < 1e-12:
+        ts = np.ones(len(idx))
+    med = float(np.median(norms[idx]))
+    scale = med / np.maximum(norms[idx], 1e-12)
+    wgt = ts * scale / ts.sum()
+
+    aggregated = []
+    for L in range(len(w_prev)):
+        upd = sum(wgt[k] * gradients[i][L] for k, i in enumerate(idx))
+        aggregated.append((w_prev[L] + upd).astype(w_prev[L].dtype))
+    return aggregated
+
+
 # ── FedConsensus-P (Personalized) ─────────────────────────────────────────────
 
 def _load_fcp_prev_weights(node_id: str, fallback: list) -> list:
@@ -945,8 +1037,15 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
                 logger.warning(f"FLTrust2: could not load fog model: {_e} — trying saved prev weights.")
                 w_prev = _load_fltrust_prev_weights()
         else:
-            logger.warning("FLTrust2: fog model not found — trying saved prev weights.")
-            w_prev = _load_fltrust_prev_weights()
+            # Γύρος 1: δεν υπάρχει broadcast από το cloud → το κοινό seeded w0 των edges
+            ref = _reference_model_path()
+            if ref is not None:
+                w_prev = _safe_load_model(ref).get_weights()
+                fog_model_path = ref
+                logger.info(f"FLTrust2: fog model not found — using round-0 reference {ref}")
+            else:
+                logger.warning("FLTrust2: fog model not found — trying saved prev weights.")
+                w_prev = _load_fltrust_prev_weights()
 
         if _is_first_round:
             try:
@@ -978,6 +1077,13 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
             aggregated_weights = _trimmed_mean(weights_list, ROUND1_FIXED_TRIM)
         else:
             aggregated_weights = _fedconsensus(weights_list, node_ids, w_prev_fc)
+
+    elif AGGREGATION_STRATEGY == 'fedconsensus_v2':
+        w_prev_fc, _cold = _get_w_prev_with_round0_fallback("FedConsensus-v2", loaded_paths)
+        if w_prev_fc is None:
+            aggregated_weights = _trimmed_mean(weights_list, ROUND1_FIXED_TRIM)
+        else:
+            aggregated_weights = _fedconsensus_v2(weights_list, node_ids, w_prev_fc)
 
     elif AGGREGATION_STRATEGY == 'fedconsensus_sv':
         w_prev_fc, _cold = _get_w_prev_with_round0_fallback("FedConsensus-SV", loaded_paths)

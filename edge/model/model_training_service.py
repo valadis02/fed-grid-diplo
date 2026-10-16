@@ -436,6 +436,17 @@ def _train_dayahead(training_date: str, train_days: int, eval_days: int, batch_s
 
     A_tr = fc.build_arrays(tr, norm_stats)
     A_ev = fc.build_arrays(ev, norm_stats, target_start=t1, target_end=e1, issue_at_midnight=True)
+
+    # Byzantine label flipping (data poisoning): εκπαίδευση σε καθρεφτισμένους στόχους
+    #   ỹ = y_max + y_min − y   (στην κανονικοποιημένη κλίμακα του σπιτιού, εύρος του train)
+    # Το μοντέλο προβλέπει την απόκλιση από το prof7: y = load_n − prof_n → ỹ_res = (ymax+ymin−load_n) − prof_n
+    if os.getenv('ATTACK_TYPE', 'none').lower() == 'label_flipping':
+        mu, sd = A_tr['mu'], A_tr['sd']
+        rn = (tr['value'].values - mu) / sd
+        ymax, ymin = float(np.nanmax(rn)), float(np.nanmin(rn))
+        load_n = A_tr['y'] + A_tr['base_n']
+        A_tr['y'] = ((ymax + ymin - load_n) - A_tr['base_n']).astype('float32')
+        logger.warning(f"[dayahead] LABEL FLIPPING: training on mirrored targets (ymin={ymin:.3f}, ymax={ymax:.3f})")
     logger.info(f"[dayahead] train samples={A_tr['n']} | eval days={A_ev.get('n', 0)}")
 
     model_path = EdgeResourcesPaths.NON_TRAINED_LOCAL_EDGE_MODEL_FILE_PATH.value

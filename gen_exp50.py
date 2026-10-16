@@ -24,6 +24,12 @@ MODES = {
 }
 M = MODES["dayahead"]
 
+# Byzantine ρυθμίσεις (βλ. cmd_gen). ATTACKERS: οι 15/50 (30%) επιτιθέμενοι του Byzantine πειράματος 1
+# (7 στο fog1 + 8 στο fog2, ίδια ανάθεση με την offline προσομοίωση).
+ATTACKERS_30 = [2, 3, 5, 10, 12, 15, 17, 29, 30, 33, 39, 40, 42, 44, 50]
+ATK = dict(attack="none", attackers=[], zeta=2.6, sigma=30.0)
+FOGCFG = dict(strategy="fedavg", krum_f=8, kappa=0.5, epochs=5)
+
 
 def mode_env(indent="      "):
     fm, td, tr, ev, bs = M
@@ -55,7 +61,9 @@ def edge_block(i, fog_ip, root, rounds, epochs):
       - TF_ENABLE_ONEDNN_OPTS=0
 {mode_env()}
       - EPOCHS={epochs}
-      - ATTACK_TYPE=none
+      - ATTACK_TYPE={ATK["attack"] if i in ATK["attackers"] else "none"}
+      - ATTACK_ZETA={ATK["zeta"]}
+      - ATTACK_NOISE_SCALE={ATK["sigma"]}
       - NORMALIZATION=per_house
       - MODEL_INIT_SEED=42
     networks: [aqtf_shared_network]
@@ -121,6 +129,7 @@ def cloud_yml(root_a, n_fogs):
 
 
 def fog_yml(k, root_pi, ip_a, edge_names):
+    strat = FOGCFG["strategy"]
     return HEAD + f"""
   {P}rabbitmq_fog:
     image: rabbitmq:3-management
@@ -155,9 +164,13 @@ def fog_yml(k, root_pi, ip_a, edge_names):
       - FOG_NAME=FOG_NODE_{k}
       - EDGE_NAMES={",".join(edge_names)}
       - ENCRYPTION_MODE=none
-      - AGGREGATION_STRATEGY=fedavg
+      - AGGREGATION_STRATEGY={strat}
       - FEDAVG_WEIGHTING=uniform
-      - KRUM_NUM_BYZANTINE=0
+      - KRUM_NUM_BYZANTINE={FOGCFG["krum_f"]}
+      - FEDCONSENSUS_KAPPA={FOGCFG["kappa"]}
+      - FLTRUST_ROOT_DATA_PATH=/app/fltrust_root/input_data.csv
+      - FLTRUST_EPOCHS={FOGCFG["epochs"]}
+      - MODEL_INIT_SEED=42
       - NORMALIZATION=per_house
 {mode_env()}
     ports:
@@ -171,6 +184,7 @@ def fog_yml(k, root_pi, ip_a, edge_names):
     volumes:
       - {root_pi}/fog/models:/app/models
       - {root_pi}/fog/models/outbox:/app/models/outbox
+      - {root_pi}/fltrust_root:/app/fltrust_root:ro
     restart: on-failure
 """
 
@@ -178,7 +192,12 @@ def fog_yml(k, root_pi, ip_a, edge_names):
 def cmd_gen(a):
     global DATA, M
     DATA, M = a.data, MODES[a.mode]
+    ATK.update(attack=a.attack, zeta=a.zeta, sigma=a.sigma,
+               attackers=([] if a.attack == "none" else
+                          ATTACKERS_30 if a.attackers == "30" else [int(x) for x in a.attackers.split(",") if x]))
+    FOGCFG.update(strategy=a.strategy, krum_f=a.krum_f, kappa=a.kappa, epochs=a.epochs)
     print(f"mode={a.mode} data={DATA} env={M}")
+    print(f"strategy={a.strategy} attack={a.attack} attackers={ATK['attackers']} zeta={a.zeta} sigma={a.sigma} krum_f={a.krum_f}")
     os.makedirs(a.out, exist_ok=True)
     n = a.edges_per_laptop
     ids_a = list(range(1, n + 1))
@@ -224,6 +243,15 @@ if __name__ == "__main__":
     g.add_argument("--out", default="exp50")
     g.add_argument("--data", default=DATA, help="φάκελος δεδομένων (lcl50_diverse | lcl50_similar | lcl_data50)")
     g.add_argument("--mode", choices=list(MODES), default="dayahead")
+    g.add_argument("--strategy", default="fedavg",
+                   choices=["fedavg", "krum", "multi_krum", "tmean", "fltrust2", "fedconsensus", "fedconsensus_v2", "fedconsensus_sv"])
+    g.add_argument("--attack", default="none",
+                   choices=["none", "label_flipping", "sign_flipping", "sign_flipping_weights", "gaussian_noise"])
+    g.add_argument("--attackers", default="30", help='"30" = οι 15 προκαθορισμένοι (30%%) ή λίστα π.χ. "2,3,5"')
+    g.add_argument("--zeta", type=float, default=2.6, help="sign_flipping: g -> -zeta*g")
+    g.add_argument("--sigma", type=float, default=30.0, help="gaussian_noise: g + N(0, sigma^2)")
+    g.add_argument("--krum-f", type=int, default=8, help="Krum f ανά fog (25 edges)")
+    g.add_argument("--kappa", type=float, default=0.5, help="FedConsensus-v2 kappa")
     g.set_defaults(fn=cmd_gen)
 
     p = sp.add_parser("prep")
