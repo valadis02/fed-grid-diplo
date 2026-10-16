@@ -233,7 +233,7 @@ if __name__ == "__main__":
     g.add_argument("--ip-a", required=True, help="IP of laptop A (cloud)")
     g.add_argument("--pi1", required=True, help="IP of raspberrypi51 (FOG_NODE_1)")
     g.add_argument("--pi2", required=True, help="IP of raspberrypi52 (FOG_NODE_2)")
-    g.add_argument("--root-a", default="C:/Users/balt5/fed_grid_diplo/fed-grid-diplo")
+    g.add_argument("--root-a", default="C:/Users/balt5/fed-grid-diplo")
     g.add_argument("--root-b", default="C:/fed", help="repo path on laptop B")
     g.add_argument("--root-pi1", default="/home/raspberrypi51/fed")
     g.add_argument("--root-pi2", default="/home/raspberrypi52/fed")
