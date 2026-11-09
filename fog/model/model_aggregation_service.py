@@ -9,6 +9,20 @@ from fog.communication.fog_resources_paths import FogResourcesPaths
 from fog.model.fltrust2_server_training import train_server_model as fltrust2_train_server
 from shared.utils import delete_files_containing
 from shared.logging_config import logger
+from fog.model.fog_attacks import apply_fog_attack, FOG_ATTACK_TYPE, FOG_ATTACKERS
+import csv
+import json
+
+# ── Seed εκτέλεσης στον fog (FLTrust2 server training) ──
+if os.getenv('RUN_SEED') is not None:
+    tf.keras.utils.set_random_seed(int(os.getenv('RUN_SEED')))
+
+# ── Ανά-γύρο log για τις μετρικές του paper (επιλογή Byzantine, TS, fallbacks) ──
+AGG_LOG_PATH = os.getenv('AGG_LOG_PATH', '/app/models/agg_log.csv')
+RUN_TAG      = os.getenv('RUN_TAG', '')
+FOG_NAME_ENV = os.getenv('FOG_NAME', '')
+_AGG_INFO    = {}     # γεμίζει από τους aggregators κάθε γύρο
+_ROUND_CTR   = [0]
 
 # ── Aggregation strategy ──────────────────────────────────────────────────────
 AGGREGATION_STRATEGY  = os.getenv('AGGREGATION_STRATEGY', 'fedavg').lower()
@@ -264,6 +278,7 @@ def _krum(weights_list: list, f: int) -> list:
     n = len(weights_list)
     if n <= 2 * f + 2:
         logger.warning(f"Krum: n={n} <= 2f+2={2*f+2} — falling back to FedAvg.")
+        _AGG_INFO['fallback'] = 'krum_bound'
         return _fedavg(weights_list, [1.0] * n)
 
     flat = [np.concatenate([w.flatten() for w in wl]) for wl in weights_list]
@@ -281,6 +296,7 @@ def _krum(weights_list: list, f: int) -> list:
         scores.append(sum(dists_i[:k]))
 
     selected = int(np.argmin(scores))
+    _AGG_INFO['selected'] = [selected]
     logger.info(f"Krum: selected client {selected} | score={scores[selected]:.4f} | n={n} | f={f} | k={k}")
     return weights_list[selected]
 
@@ -291,6 +307,7 @@ def _multi_krum(weights_list: list, f: int, m: int = 0) -> list:
         m = max(1, n - f)
     if n <= 2 * f + 2:
         logger.warning(f"Multi-Krum: n={n} <= 2f+2={2*f+2} — falling back to FedAvg.")
+        _AGG_INFO['fallback'] = 'krum_bound'
         return _fedavg(weights_list, [1.0] * n)
 
     flat = [np.concatenate([w.flatten() for w in wl]) for wl in weights_list]
@@ -308,6 +325,7 @@ def _multi_krum(weights_list: list, f: int, m: int = 0) -> list:
         scores.append(sum(dists_i[:k]))
 
     selected_indices = sorted(range(n), key=lambda i: scores[i])[:m]
+    _AGG_INFO['selected'] = list(selected_indices)
     logger.info(f"Multi-Krum: selected {m}/{n} clients: {selected_indices} | f={f}")
     return _fedavg([weights_list[i] for i in selected_indices], [1.0] * m)
 
@@ -317,6 +335,7 @@ def _trimmed_mean(weights_list: list, f: int, trim_fraction: float = 0.0) -> lis
     f_actual = max(0, int(trim_fraction * n)) if trim_fraction > 0.0 else f
     if 2 * f_actual >= n:
         logger.warning(f"TrimmedMean: 2f={2*f_actual} >= n={n} — falling back to FedAvg.")
+        _AGG_INFO['fallback'] = 'tmean_bound'
         return _fedavg(weights_list, [1.0] * n)
 
     result = []
@@ -325,7 +344,50 @@ def _trimmed_mean(weights_list: list, f: int, trim_fraction: float = 0.0) -> lis
         trimmed = np.sort(stacked, axis=0)[f_actual: n - f_actual]
         result.append(np.mean(trimmed, axis=0))
 
+    _AGG_INFO['trim'] = f_actual
     logger.info(f"TrimmedMean: f={f_actual} | kept {n - 2*f_actual}/{n} clients")
+    return result
+
+
+def _write_agg_log(node_ids, n, f, agg_time, peak_ram, cpu, energy):
+    """Μία γραμμή ανά γύρο στο AGG_LOG_PATH (append). Δεν σταματά ποτέ το aggregation."""
+    try:
+        byz = set(FOG_ATTACKERS)
+        sel = _AGG_INFO.get('selected')
+        sel_ids = [node_ids[i] for i in sel] if sel is not None else None
+        ts = _AGG_INFO.get('ts')
+        ts_map = dict(zip(node_ids, ts)) if ts is not None else None
+        row = {
+            'time': time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'run_tag': RUN_TAG, 'fog': FOG_NAME_ENV, 'round': _ROUND_CTR[0],
+            'strategy': AGGREGATION_STRATEGY, 'n': n, 'f': f,
+            'n_byz_present': sum(1 for x in node_ids if x in byz),
+            'fallback': _AGG_INFO.get('fallback', ''),
+            'trim': _AGG_INFO.get('trim', ''),
+            'selected': json.dumps(sel_ids) if sel_ids is not None else '',
+            'n_byz_selected': sum(1 for x in sel_ids if x in byz) if sel_ids is not None else '',
+            'ts': json.dumps(ts_map) if ts_map is not None else '',
+            'n_byz_ts_pos': sum(1 for k, v in ts_map.items() if k in byz and v > 0) if ts_map else '',
+            'n_honest_ts_zero': sum(1 for k, v in ts_map.items() if k not in byz and v <= 0) if ts_map else '',
+            'agg_time_s': agg_time, 'peak_ram_mb': peak_ram, 'cpu_pct': cpu, 'energy_wh': energy,
+        }
+        new = not os.path.exists(AGG_LOG_PATH)
+        os.makedirs(os.path.dirname(AGG_LOG_PATH) or '.', exist_ok=True)
+        with open(AGG_LOG_PATH, 'a', newline='') as fh:
+            w = csv.DictWriter(fh, fieldnames=list(row))
+            if new:
+                w.writeheader()
+            w.writerow(row)
+    except Exception as e:
+        logger.warning(f"agg_log: could not write: {e}")
+
+
+def _median(weights_list: list) -> list:
+    """Coordinate-wise Median (Yin et al., 2018). Χωρίς παραμέτρους."""
+    n = len(weights_list)
+    result = [np.median(np.stack([wl[k] for wl in weights_list], axis=0), axis=0).astype(weights_list[0][k].dtype)
+              for k in range(len(weights_list[0]))]
+    logger.info(f"Median: coordinate-wise median over {n} clients")
     return result
 
 
@@ -363,6 +425,7 @@ def _fltrust(weights_list: list, w_prev: list, w_server: list, f: int = 0) -> li
 
     if g0_norm < 1e-10:
         logger.warning("FLTrust: server gradient near-zero — fallback to FedAvg.")
+        _AGG_INFO['fallback'] = 'fltrust_g0_zero'
         return _fedavg(weights_list, [1.0] * n)
 
     trust_scores      = []
@@ -388,9 +451,11 @@ def _fltrust(weights_list: list, w_prev: list, w_server: list, f: int = 0) -> li
         logger.info(f"FLTrust: client {i} | cosine_sim={cos_sim:.4f} | TS={ts:.4f}")
 
     total_ts = sum(trust_scores)
+    _AGG_INFO['ts'] = [round(float(t), 5) for t in trust_scores]
 
     if total_ts < 1e-10:
         logger.warning("FLTrust: all trust scores zero — fallback to FedAvg.")
+        _AGG_INFO['fallback'] = 'fltrust_all_zero'
         return _fedavg(weights_list, [1.0] * n)
 
     logger.info(
@@ -920,6 +985,8 @@ def _fedconsensus_p(weights_list: list, node_ids: list, w_global_prev: list) -> 
 def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1.0,
                                    round_start_time: float = None):
     t_receive_end = time.perf_counter()
+    _AGG_INFO.clear()
+    _ROUND_CTR[0] += 1
 
     cpu_temp_before = _read_cpu_temp()
     ram_monitor     = PeakRamMonitor(interval=0.5)
@@ -947,6 +1014,11 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
         ram_monitor.stop()
         logger.error("No edge models loaded — cannot aggregate.")
         return None
+
+    # ── Adaptive attacks (ALIE / IPM / Min-Max), προσομοίωση στον fog ─────────
+    if FOG_ATTACK_TYPE != 'none':
+        w_prev_atk, _ = _get_w_prev_with_round0_fallback("FogAttack", loaded_paths)
+        weights_list = apply_fog_attack(weights_list, node_ids, w_prev_atk)
 
     n = len(weights_list)
     f = NUM_BYZANTINE
@@ -983,6 +1055,9 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
 
     elif AGGREGATION_STRATEGY == 'tmean':
         aggregated_weights = _trimmed_mean(weights_list, f, trim_fraction=TMEAN_TRIM_FRACTION)
+
+    elif AGGREGATION_STRATEGY == 'median':
+        aggregated_weights = _median(weights_list)
 
     elif AGGREGATION_STRATEGY == 'fedema':
         aggregated_weights = _fedema(weights_list, node_ids)
@@ -1129,6 +1204,8 @@ def aggregate_models_with_metrics(edge_models_cache: dict, fog_weight: float = 1
         round(t_receive_end - round_start_time, 4)
         if round_start_time is not None else None
     )
+
+    _write_agg_log(node_ids, n, f, aggregation_time_s, peak_ram_mb, avg_cpu_usage, estimated_energy)
 
     logger.info(
         f"[AGG METRICS] strategy={AGGREGATION_STRATEGY.upper()} | "

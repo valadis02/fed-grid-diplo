@@ -31,6 +31,17 @@ from edge.communication.edge_resources_paths import EdgeResourcesPaths
 from edge.model.model_architectures import create_model
 from edge.model.model_training_service import train_local_edge_model
 from shared.logging_config import logger
+from shared.attacks import attack_update, EDGE_UPDATE_ATTACKS
+
+# ── Seed εκτέλεσης (shuffle εκπαίδευσης, θόρυβος GN) ─────────────────────────
+# RUN_SEED: ίδιο για όλο το run· κάθε edge παίρνει δικό του παράγωγο seed.
+RUN_SEED = os.getenv('RUN_SEED')
+if RUN_SEED is not None:
+    import tensorflow as _tf
+    _edge_idx = int(os.getenv('EDGE_NAME', 'edge_node_0').rsplit('_', 1)[-1])
+    _tf.keras.utils.set_random_seed(int(RUN_SEED) * 1000 + _edge_idx)
+    logger.info(f"Edge: RUN_SEED={RUN_SEED} → seed={int(RUN_SEED) * 1000 + _edge_idx}")
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── Encryption mode ───────────────────────────────────────────────────────────
 ENCRYPTION_MODE = os.getenv('ENCRYPTION_MODE', 'none').lower()
@@ -159,19 +170,12 @@ def apply_attack(model_path: str) -> str:
         weights[-1] = -weights[-1]
         logger.warning(f"Edge [{EDGE_NAME}]: LABEL FLIPPING (legacy) — last layer weights negated.")
 
-    elif ATTACK_TYPE == 'sign_flipping':
+    elif ATTACK_TYPE in EDGE_UPDATE_ATTACKS:
         ref_path = EdgeResourcesPaths.NON_TRAINED_LOCAL_EDGE_MODEL_FILE_PATH.value
         w_t = tf.keras.models.load_model(ref_path, compile=False).get_weights()
-        weights = [(wt - ATTACK_ZETA * (wi - wt)).astype(wi.dtype) for wi, wt in zip(weights, w_t)]
-        logger.warning(f"Edge [{EDGE_NAME}]: SIGN FLIPPING applied — update g -> -{ATTACK_ZETA}*g.")
-
-    elif ATTACK_TYPE == 'sign_flipping_weights':
-        weights = [-w for w in weights]
-        logger.warning(f"Edge [{EDGE_NAME}]: SIGN FLIPPING (weights) applied — all weights negated.")
-
-    elif ATTACK_TYPE == 'gaussian_noise':
-        weights = [w + np.random.normal(0, ATTACK_NOISE_SCALE, w.shape).astype(w.dtype) for w in weights]
-        logger.warning(f"Edge [{EDGE_NAME}]: GAUSSIAN NOISE applied — g + N(0, {ATTACK_NOISE_SCALE}^2).")
+        weights = attack_update(weights, w_t, ATTACK_TYPE, ATTACK_ZETA, ATTACK_NOISE_SCALE)
+        logger.warning(f"Edge [{EDGE_NAME}]: {ATTACK_TYPE.upper()} applied "
+                       f"(zeta={ATTACK_ZETA}, sigma={ATTACK_NOISE_SCALE}).")
 
     else:
         logger.warning(f"Edge: Unknown attack type '{ATTACK_TYPE}' — no attack applied.")

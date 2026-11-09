@@ -27,8 +27,14 @@ M = MODES["dayahead"]
 # Byzantine ρυθμίσεις (βλ. cmd_gen). ATTACKERS: οι 15/50 (30%) επιτιθέμενοι του Byzantine πειράματος 1
 # (7 στο fog1 + 8 στο fog2, ίδια ανάθεση με την offline προσομοίωση).
 ATTACKERS_30 = [2, 3, 5, 10, 12, 15, 17, 29, 30, 33, 39, 40, 42, 44, 50]
-ATK = dict(attack="none", attackers=[], zeta=2.6, sigma=30.0)
-FOGCFG = dict(strategy="fedavg", krum_f=8, kappa=0.5, epochs=5)
+
+from shared.attackers import ORDER_FOG1, ORDER_FOG2, PER_FOG, attackers_for  # noqa: E402
+assert attackers_for(30) == ATTACKERS_30
+ATK = dict(attack="none", attackers=[], zeta=2.6, sigma=30.0, ipm_eps=2.0, minmax_perturb="std")
+# Adaptive επιθέσεις: εφαρμόζονται στον fog (omniscient, συνεργαζόμενοι) — τα edges εκπαιδεύονται τίμια.
+FOG_ATTACKS = ("alie", "ipm", "minmax")
+FOGCFG = dict(strategy="fedavg", krum_f={1: 7, 2: 8}, kappa=0.5, epochs=5, tmean_beta=0.2)
+RUN = dict(seed=42, tag="")
 
 
 def mode_env(indent="      "):
@@ -61,11 +67,12 @@ def edge_block(i, fog_ip, root, rounds, epochs):
       - TF_ENABLE_ONEDNN_OPTS=0
 {mode_env()}
       - EPOCHS={epochs}
-      - ATTACK_TYPE={ATK["attack"] if i in ATK["attackers"] else "none"}
+      - ATTACK_TYPE={ATK["attack"] if (i in ATK["attackers"] and ATK["attack"] not in FOG_ATTACKS) else "none"}
       - ATTACK_ZETA={ATK["zeta"]}
       - ATTACK_NOISE_SCALE={ATK["sigma"]}
       - NORMALIZATION=per_house
-      - MODEL_INIT_SEED=42
+      - MODEL_INIT_SEED={RUN["seed"]}
+      - RUN_SEED={RUN["seed"]}
     networks: [aqtf_shared_network]
     command: python3 -m edge.model.run_federated_cycle
     volumes:
@@ -166,11 +173,18 @@ def fog_yml(k, root_pi, ip_a, edge_names):
       - ENCRYPTION_MODE=none
       - AGGREGATION_STRATEGY={strat}
       - FEDAVG_WEIGHTING=uniform
-      - KRUM_NUM_BYZANTINE={FOGCFG["krum_f"]}
+      - KRUM_NUM_BYZANTINE={FOGCFG["krum_f"][k]}
+      - TMEAN_TRIM_FRACTION={FOGCFG["tmean_beta"]}
+      - RUN_TAG={RUN["tag"]}
       - FEDCONSENSUS_KAPPA={FOGCFG["kappa"]}
+      - FOG_ATTACK_TYPE={ATK["attack"] if ATK["attack"] in FOG_ATTACKS else "none"}
+      - FOG_ATTACKERS={",".join(e for e in edge_names if int(e.rsplit("_", 1)[1]) in ATK["attackers"])}
+      - IPM_EPS={ATK["ipm_eps"]}
+      - MINMAX_PERTURB={ATK["minmax_perturb"]}
       - FLTRUST_ROOT_DATA_PATH=/app/fltrust_root/input_data.csv
       - FLTRUST_EPOCHS={FOGCFG["epochs"]}
-      - MODEL_INIT_SEED=42
+      - MODEL_INIT_SEED={RUN["seed"]}
+      - RUN_SEED={RUN["seed"]}
       - NORMALIZATION=per_house
 {mode_env()}
     ports:
@@ -192,12 +206,18 @@ def fog_yml(k, root_pi, ip_a, edge_names):
 def cmd_gen(a):
     global DATA, M
     DATA, M = a.data, MODES[a.mode]
-    ATK.update(attack=a.attack, zeta=a.zeta, sigma=a.sigma,
+    ATK.update(attack=a.attack, zeta=a.zeta, sigma=a.sigma, ipm_eps=a.ipm_eps, minmax_perturb=a.minmax_perturb,
                attackers=([] if a.attack == "none" else
-                          ATTACKERS_30 if a.attackers == "30" else [int(x) for x in a.attackers.split(",") if x]))
-    FOGCFG.update(strategy=a.strategy, krum_f=a.krum_f, kappa=a.kappa, epochs=a.epochs)
+                          attackers_for(a.frac) if not a.attackers else [int(x) for x in a.attackers.split(",") if x]))
+    # Krum f ανά fog = μέγιστο πλήθος Byzantine του fog για το ποσοστό (και στα runs χωρίς επίθεση)
+    kf = dict(zip((1, 2), PER_FOG[a.frac])) if a.krum_f < 0 else {1: a.krum_f, 2: a.krum_f}
+    FOGCFG.update(strategy=a.strategy, krum_f=kf, kappa=a.kappa, epochs=a.epochs, tmean_beta=a.tmean_beta)
+    RUN.update(seed=a.seed, tag=a.tag or f"{a.strategy}_{a.attack}_f{a.frac}_s{a.seed}_{os.path.basename(a.data.rstrip('/'))}")
+    for k, nk in kf.items():
+        if 25 <= 2 * nk + 2 and a.strategy in ("krum", "multi_krum"):
+            print(f"WARNING: fog{k} n=25 <= 2f+2={2*nk+2} — Krum εκτός ορίου (fallback σε FedAvg, καταγράφεται στο agg_log)")
     print(f"mode={a.mode} data={DATA} env={M}")
-    print(f"strategy={a.strategy} attack={a.attack} attackers={ATK['attackers']} zeta={a.zeta} sigma={a.sigma} krum_f={a.krum_f}")
+    print(f"strategy={a.strategy} attack={a.attack} frac={a.frac}% attackers={ATK['attackers']} krum_f={kf} beta={a.tmean_beta} seed={a.seed} tag={RUN['tag']}")
     os.makedirs(a.out, exist_ok=True)
     n = a.edges_per_laptop
     ids_a = list(range(1, n + 1))
@@ -244,13 +264,20 @@ if __name__ == "__main__":
     g.add_argument("--data", default=DATA, help="φάκελος δεδομένων (lcl50_diverse | lcl50_similar | lcl_data50)")
     g.add_argument("--mode", choices=list(MODES), default="dayahead")
     g.add_argument("--strategy", default="fedavg",
-                   choices=["fedavg", "krum", "multi_krum", "tmean", "fltrust2", "fedconsensus", "fedconsensus_v2", "fedconsensus_sv"])
+                   choices=["fedavg", "krum", "multi_krum", "tmean", "median", "fltrust2"])
     g.add_argument("--attack", default="none",
-                   choices=["none", "label_flipping", "sign_flipping", "sign_flipping_weights", "gaussian_noise"])
-    g.add_argument("--attackers", default="30", help='"30" = οι 15 προκαθορισμένοι (30%%) ή λίστα π.χ. "2,3,5"')
+                   choices=["none", "label_flipping", "sign_flipping", "sign_flipping_weights", "gaussian_noise",
+                            "alie", "ipm", "minmax"])
+    g.add_argument("--frac", type=int, default=30, choices=[10, 20, 30, 40], help="ποσοστό επιτιθέμενων (nested σύνολα)")
+    g.add_argument("--attackers", default="", help='ρητή λίστα π.χ. "2,3,5" (αντικαθιστά το --frac)')
+    g.add_argument("--seed", type=int, default=42, help="MODEL_INIT_SEED και RUN_SEED (shuffle, θόρυβος)")
+    g.add_argument("--tmean-beta", type=float, default=0.2, help="Trimmed Mean: κόβει floor(beta*n) από κάθε άκρο· σταθερό, όχι το πραγματικό f/N")
+    g.add_argument("--tag", default="", help="RUN_TAG στο agg_log.csv (default: strategy_attack_frac_seed_data)")
     g.add_argument("--zeta", type=float, default=2.6, help="sign_flipping: g -> -zeta*g")
     g.add_argument("--sigma", type=float, default=30.0, help="gaussian_noise: g + N(0, sigma^2)")
-    g.add_argument("--krum-f", type=int, default=8, help="Krum f ανά fog (25 edges)")
+    g.add_argument("--ipm-eps", type=float, default=2.0, help="IPM: g = -eps*mu")
+    g.add_argument("--minmax-perturb", default="std", choices=["std", "unit", "sign"])
+    g.add_argument("--krum-f", type=int, default=-1, help="Krum f ανά fog· -1 = αυτόματα από το --frac")
     g.add_argument("--kappa", type=float, default=0.5, help="FedConsensus-v2 kappa")
     g.set_defaults(fn=cmd_gen)
 

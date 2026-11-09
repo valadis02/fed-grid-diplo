@@ -204,3 +204,19 @@ def metrics(y_kwh: np.ndarray, p_kwh: np.ndarray) -> dict:
         out["day_err"] = float(np.mean(np.abs(dp - dy) / np.maximum(dy, 1e-9)))
     return out
 
+
+
+def label_flip_targets(A_tr: dict, tr: pd.DataFrame) -> tuple:
+    """
+    Byzantine label flipping (data poisoning), in-place στο A_tr:
+      ỹ = y_max + y_min − y  στην κανονικοποιημένη κλίμακα του σπιτιού (εύρος του train).
+    Το μοντέλο προβλέπει την απόκλιση από το prof7: y = load_n − prof_n → ỹ_res = (ymax+ymin−load_n) − prof_n.
+    Κοινό για edge (testbed) και tools/offline_sim.py. Επιστρέφει (ymin, ymax).
+    """
+    mu, sd = A_tr['mu'], A_tr['sd']
+    rn = (tr['value'].values - mu) / sd
+    ymax, ymin = float(np.nanmax(rn)), float(np.nanmin(rn))
+    load_n = A_tr['y'] + A_tr['base_n']
+    A_tr['y'] = ((ymax + ymin - load_n) - A_tr['base_n']).astype('float32')
+    return ymin, ymax
+
