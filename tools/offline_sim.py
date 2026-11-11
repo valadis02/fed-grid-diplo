@@ -32,7 +32,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 def parse():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="lcl50_diverse")
+    ap.add_argument("--data", default="lcl50_similar")
     ap.add_argument("--strategy", required=True, choices=["fedavg", "krum", "multi_krum", "tmean", "median", "fltrust2"])
     ap.add_argument("--attack", default="none",
                     choices=["none", "label_flipping", "sign_flipping", "gaussian_noise", "alie", "ipm", "minmax"])
@@ -46,10 +46,10 @@ def parse():
     ap.add_argument("--sigma", type=float, default=30.0)
     ap.add_argument("--ipm-eps", type=float, default=2.0)
     ap.add_argument("--minmax-perturb", default="std", choices=["std", "unit", "sign"])
-    ap.add_argument("--tmean-beta", type=float, default=0.2)
+    ap.add_argument("--tmean-beta", type=float, default=0.0, help="0 = κόβει f (πραγματικοί Byzantine του fog) από κάθε άκρο· >0 = σταθερό β (ablation)")
     ap.add_argument("--krum-f", type=int, default=-1, help="-1 = πλήθος επιτιθέμενων του fog για το --frac")
     ap.add_argument("--fltrust-epochs", type=int, default=5)
-    ap.add_argument("--root-houses", default="1,26", help="σπίτι root dataset ανά fog (FLTrust2)")
+    ap.add_argument("--root-houses", default="9,38", help="root household ανά fog (FLTrust2): medoid του fog κατά μέση cosine των updates σε pilot χωρίς επίθεση, εκτός επιτιθέμενων (diag_root)")
     ap.add_argument("--train-date", default="2012-10-15")
     ap.add_argument("--train-days", type=int, default=382)
     ap.add_argument("--eval-days", type=int, default=92)
@@ -93,23 +93,35 @@ FOG_ATTACKS = ("alie", "ipm", "minmax")
 
 
 def load_house(i):
+    """Κρατά μόνο τη σειρά του train (μικρή) και τα eval arrays. Τα train arrays (~75 MB/σπίτι)
+    χτίζονται τη στιγμή της εκπαίδευσης, ώστε η μνήμη να μην κλιμακώνεται με τα 50 σπίτια."""
     path = os.path.join(ROOT, a.data, f"house_{i}", "input_data.csv")
     t0, t1, e1 = fc.windows(a.train_date, a.train_days, a.eval_days)
     tr = fc.load_series(path, t0, t1)
     ev = fc.load_series(path, t1 - pd.Timedelta(days=fc.HISTORY_DAYS), e1)
     stats = fc.fit_stats(tr)
-    A_tr = fc.build_arrays(tr, stats)
     A_ev = fc.build_arrays(ev, stats, target_start=t1, target_end=e1, issue_at_midnight=True)
     A_ev.pop("ts", None)
-    return tr, A_tr, A_ev
+    return tr, stats, A_ev
+
+
+def train_arrays(i):
+    tr, stats, _ = data[i]
+    A = fc.build_arrays(tr, stats)
+    if i in ATT and a.attack == "label_flipping":
+        fc.label_flip_targets(A, tr)
+    return A
 
 
 def local_train(model, w_global, A, seed):
+    import gc
     tf.keras.utils.set_random_seed(seed)
     model.set_weights(w_global)
     model.compile(optimizer=tf.keras.optimizers.Adam(0.001), loss="mse")   # νέος Adam κάθε γύρο, όπως στο edge
     model.fit([A["Xh"], A["Xf"]], A["y"], epochs=a.epochs, batch_size=a.batch, shuffle=True, verbose=0)
-    return model.get_weights()
+    w = model.get_weights()
+    gc.collect()
+    return w
 
 
 def fog_aggregate(k, wl, ids, w_prev, model, tmp_model_path, rnd):
@@ -150,7 +162,8 @@ def main():
     global ATT, TAG, ROOTS
     ATT = [] if a.attack == "none" else [i for i in attackers_for(a.frac) if i <= a.houses]
     ROOTS = [int(x) for x in a.root_houses.split(",")]
-    TAG = a.tag or f"{a.strategy}_{a.attack}_f{a.frac}_s{a.seed}_{os.path.basename(a.data.rstrip('/'))}"
+    beta = f"_b{a.tmean_beta:g}" if (a.strategy == "tmean" and a.tmean_beta > 0) else ""
+    TAG = a.tag or f"{a.strategy}_{a.attack}_f{a.frac}{beta}_s{a.seed}_{os.path.basename(a.data.rstrip('/'))}"
     os.makedirs(a.out, exist_ok=True)
     out_json = os.path.join(a.out, f"{TAG}.json")
     if os.path.exists(out_json) and not a.force:
@@ -158,11 +171,9 @@ def main():
 
     t_start = time.time()
     H = list(range(1, a.houses + 1))
+    global data
     data = {i: load_house(i) for i in H}
     houses_eval = [(i, f"house_{i}", data[i][2]) for i in H]
-    for i in ATT:
-        if a.attack == "label_flipping":
-            fc.label_flip_targets(data[i][1], data[i][0])
     fogs = {1: H[:a.houses // 2], 2: H[a.houses // 2:]}
 
     model = create_model(os.getenv("MODEL_ARCHITECTURE", "simple_lstm_two_gates"))
@@ -174,7 +185,9 @@ def main():
         for k, members in fogs.items():
             wl, ids = [], []
             for i in members:
-                w = local_train(model, w_glob, data[i][1], a.seed * 10**6 + r * 10**3 + i)
+                A = train_arrays(i)
+                w = local_train(model, w_glob, A, a.seed * 10**6 + r * 10**3 + i)
+                del A
                 if i in ATT and a.attack in EDGE_UPDATE_ATTACKS:
                     np.random.seed(a.seed * 10**6 + r * 10**3 + 500 + i)
                     w = attack_update(w, w_glob, a.attack, a.zeta, a.sigma)

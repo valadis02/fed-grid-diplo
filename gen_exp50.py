@@ -33,7 +33,7 @@ assert attackers_for(30) == ATTACKERS_30
 ATK = dict(attack="none", attackers=[], zeta=2.6, sigma=30.0, ipm_eps=2.0, minmax_perturb="std")
 # Adaptive επιθέσεις: εφαρμόζονται στον fog (omniscient, συνεργαζόμενοι) — τα edges εκπαιδεύονται τίμια.
 FOG_ATTACKS = ("alie", "ipm", "minmax")
-FOGCFG = dict(strategy="fedavg", krum_f={1: 7, 2: 8}, kappa=0.5, epochs=5, tmean_beta=0.2)
+FOGCFG = dict(strategy="fedavg", krum_f={1: 7, 2: 8}, kappa=0.5, epochs=5, tmean_beta=0.0)
 RUN = dict(seed=42, tag="")
 
 
@@ -271,7 +271,7 @@ if __name__ == "__main__":
     g.add_argument("--frac", type=int, default=30, choices=[10, 20, 30, 40], help="ποσοστό επιτιθέμενων (nested σύνολα)")
     g.add_argument("--attackers", default="", help='ρητή λίστα π.χ. "2,3,5" (αντικαθιστά το --frac)')
     g.add_argument("--seed", type=int, default=42, help="MODEL_INIT_SEED και RUN_SEED (shuffle, θόρυβος)")
-    g.add_argument("--tmean-beta", type=float, default=0.2, help="Trimmed Mean: κόβει floor(beta*n) από κάθε άκρο· σταθερό, όχι το πραγματικό f/N")
+    g.add_argument("--tmean-beta", type=float, default=0.0, help="0 = κόβει f από κάθε άκρο (όπως το f του Krum); >0 = σταθερό β (ablation)")
     g.add_argument("--tag", default="", help="RUN_TAG στο agg_log.csv (default: strategy_attack_frac_seed_data)")
     g.add_argument("--zeta", type=float, default=2.6, help="sign_flipping: g -> -zeta*g")
     g.add_argument("--sigma", type=float, default=30.0, help="gaussian_noise: g + N(0, sigma^2)")
