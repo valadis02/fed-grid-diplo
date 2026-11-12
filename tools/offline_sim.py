@@ -49,7 +49,7 @@ def parse():
     ap.add_argument("--tmean-beta", type=float, default=0.0, help="0 = κόβει f (πραγματικοί Byzantine του fog) από κάθε άκρο· >0 = σταθερό β (ablation)")
     ap.add_argument("--krum-f", type=int, default=-1, help="-1 = πλήθος επιτιθέμενων του fog για το --frac")
     ap.add_argument("--fltrust-epochs", type=int, default=5)
-    ap.add_argument("--root-houses", default="9,38", help="root household ανά fog (FLTrust2): medoid του fog κατά μέση cosine των updates σε pilot χωρίς επίθεση, εκτός επιτιθέμενων (diag_root)")
+    ap.add_argument("--root-houses", default="", help="root household ανά fog (FLTrust2), π.χ. 19,45· κενό = medoid του fog για το dataset (DEFAULT_ROOTS, από tools/diag_root.py)")
     ap.add_argument("--train-date", default="2012-10-15")
     ap.add_argument("--train-days", type=int, default=382)
     ap.add_argument("--eval-days", type=int, default=92)
@@ -90,6 +90,8 @@ if os.getenv("TF_NUM_INTRAOP_THREADS"):
     tf.config.threading.set_intra_op_parallelism_threads(int(os.environ["TF_NUM_INTRAOP_THREADS"]))
     tf.config.threading.set_inter_op_parallelism_threads(1)
 FOG_ATTACKS = ("alie", "ipm", "minmax")
+# Medoid κάθε fog (μέση cosine των updates, γύροι 1-3, χωρίς επίθεση), εκτός επιτιθέμενων σε όλα τα ποσοστά
+DEFAULT_ROOTS = {"lcl50_similar": "9,38", "lcl50_diverse": "6,34"}
 
 
 def load_house(i):
@@ -161,9 +163,12 @@ def fog_aggregate(k, wl, ids, w_prev, model, tmp_model_path, rnd):
 def main():
     global ATT, TAG, ROOTS
     ATT = [] if a.attack == "none" else [i for i in attackers_for(a.frac) if i <= a.houses]
-    ROOTS = [int(x) for x in a.root_houses.split(",")]
+    dname = os.path.basename(a.data.rstrip('/'))
+    roots = a.root_houses or DEFAULT_ROOTS[dname]
+    ROOTS = [int(x) for x in roots.split(",")]
+    rsuf = f"_root{roots.replace(',', '-')}" if (a.strategy == "fltrust2" and a.root_houses and a.root_houses != DEFAULT_ROOTS[dname]) else ""
     beta = f"_b{a.tmean_beta:g}" if (a.strategy == "tmean" and a.tmean_beta > 0) else ""
-    TAG = a.tag or f"{a.strategy}_{a.attack}_f{a.frac}{beta}_s{a.seed}_{os.path.basename(a.data.rstrip('/'))}"
+    TAG = a.tag or f"{a.strategy}_{a.attack}_f{a.frac}{beta}{rsuf}_s{a.seed}_{dname}"
     os.makedirs(a.out, exist_ok=True)
     out_json = os.path.join(a.out, f"{TAG}.json")
     if os.path.exists(out_json) and not a.force:

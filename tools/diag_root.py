@@ -2,7 +2,7 @@
 # Χρήση: python tools/diag_root.py
 import os,sys
 ROOT_=os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])),'..'))
-sys.argv=['x','--strategy','fedavg','--data','lcl50_similar']; sys.path.insert(0,ROOT_); __file__=os.path.join(ROOT_,'tools','offline_sim.py')
+sys.argv=['x','--strategy','fedavg','--data',os.getenv('DIAG_DATA','lcl50_similar')]; sys.path.insert(0,ROOT_); __file__=os.path.join(ROOT_,'tools','offline_sim.py')
 exec(open(os.path.join(ROOT_,'tools','offline_sim.py')).read().split('def main():')[0])
 import numpy as np, json
 import fog.model.fog_attacks as fa
@@ -29,4 +29,10 @@ for r in range(1,4):
     f1=np.mean([G[i] for i in H[:25]],0); f2=np.mean([G[i] for i in H[25:]],0); base=fa._flatten(w)
     w=fa._unflatten(base+(f1+f2)/3,w)
 json.dump(out,open('diag_root.json','w'))
+# Τελική επιλογή: μέση cosine στους γύρους 1-3, εκτός επιτιθέμενων σε όλα τα ποσοστά
+for k in (1, 2):
+    m = {h: sum(out[r][k]['meancos'][h] for r in (1, 2, 3)) / 3 for h in out[1][k]['meancos']}
+    ok = sorted([h for h in m if h not in ever], key=lambda h: -m[h])
+    print(f"fog{k}: medoid = house {ok[0]}  | least representative = house {ok[-1]}")
 
+    

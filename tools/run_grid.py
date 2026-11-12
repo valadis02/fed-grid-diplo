@@ -40,9 +40,27 @@ def grid(seeds, only, fracs=FRACS, sets=("lcl50_similar", "lcl50_diverse")):
     return runs
 
 
-def tag(data, rule, atk, frac, seed, beta=0):
+# Συμπληρωματικά πειράματα (--plan)
+#   root    : FLTrust στο similar 30% με άλλα root households (medoid = 9,38 είναι στο core grid):
+#             19,45 = τα λιγότερο αντιπροσωπευτικά μη-επιτιθέμενα σπίτια κάθε fog (diag_root, γύροι 1-3)
+#             1,26  = το πρώτο σπίτι κάθε fog (αυθαίρετη επιλογή)
+#   diverse : όλοι οι κανόνες × (none + 6 επιθέσεις) στο 30%, cross-cluster σπίτια (lcl50_diverse)
+ALT_ROOTS = ["19,45", "1,26"]
+
+
+def plan_runs(plan, seeds):
+    if plan == "root":
+        return [("lcl50_similar", "fltrust2", atk, 30, s, 0, roots)
+                for s in seeds for roots in ALT_ROOTS for atk in ["none"] + ATTACKS]
+    if plan == "diverse":
+        return [("lcl50_diverse", r, atk, 30, s) for s in seeds for r in RULES for atk in ["none"] + ATTACKS]
+    raise SystemExit(f"άγνωστο plan {plan}")
+
+
+def tag(data, rule, atk, frac, seed, beta=0, roots=""):
     b = f"_b{beta:g}" if beta else ""
-    return f"{rule}_{atk}_f{frac}{b}_s{seed}_{data}"
+    rs = f"_root{roots.replace(',', '-')}" if roots else ""
+    return f"{rule}_{atk}_f{frac}{b}{rs}_s{seed}_{data}"
 
 
 def main():
@@ -55,10 +73,12 @@ def main():
     ap.add_argument("--sets", default="lcl50_similar")
     ap.add_argument("--out", default="results/offline")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--plan", default="core", choices=["core", "root", "diverse"])
     a = ap.parse_args()
 
-    runs = grid([int(s) for s in a.seeds.split(",")], [x for x in a.only.split(",") if x],
-                [int(f) for f in a.fracs.split(",")], a.sets.split(","))
+    seeds = [int(s) for s in a.seeds.split(",")]
+    runs = (grid(seeds, [x for x in a.only.split(",") if x], [int(f) for f in a.fracs.split(",")], a.sets.split(","))
+            if a.plan == "core" else plan_runs(a.plan, seeds))
     todo = [r for r in runs if not os.path.exists(os.path.join(ROOT, a.out, tag(*r) + ".json"))]
     print(f"{len(runs)} runs στο grid, {len(runs) - len(todo)} έτοιμα, {len(todo)} μένουν")
     if a.list:
@@ -84,9 +104,10 @@ def main():
     def run(r):
         data, rule, atk, frac, seed = r[:5]
         beta = r[5] if len(r) > 5 else 0
+        roots = r[6] if len(r) > 6 else ""
         log = os.path.join(ROOT, a.out, "logs", tag(*r) + ".log")
         cmd = [sys.executable, os.path.join(ROOT, "tools", "offline_sim.py"), "--data", data, "--strategy", rule,
-               "--attack", atk, "--frac", str(frac), "--seed", str(seed), "--tmean-beta", str(beta), "--out", os.path.join(ROOT, a.out)]
+               "--attack", atk, "--frac", str(frac), "--seed", str(seed), "--tmean-beta", str(beta), "--out", os.path.join(ROOT, a.out)] + (["--root-houses", roots] if roots else [])
         with open(log, "w") as fh:
             rc = subprocess.call(cmd, stdout=fh, stderr=subprocess.STDOUT, env=env, cwd=ROOT)
         (ok.__setitem__(0, ok[0] + 1) if rc == 0 else fails.append(tag(*r)))
